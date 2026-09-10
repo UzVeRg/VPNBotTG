@@ -58,9 +58,20 @@ pub struct RemnawaveUser {
     pub id: i64,
     pub username: String,
     pub status: String,
+    pub traffic_limit_bytes: u64,
     pub expire_at: String,
     pub telegram_id: Option<u64>,
     pub subscription_url: String,
+    pub user_traffic: UserTraffic,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserTraffic {
+    pub used_traffic_bytes: u64,
+    pub lifetime_used_traffic_bytes: u64,
+    pub online_at: Option<String>,
+    pub first_connected_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,8 +90,5 @@ pub enum RemnawaveError {
     Http(#[from] reqwest::Error),
 
     #[error("Remnawave API вернул HTTP {status}: {body}")]
-    Api {
-        status: StatusCode,
-        body: String,
-    },
+    Api { status: StatusCode, body: String },
 }

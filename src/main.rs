@@ -1,6 +1,7 @@
 mod bot;
 mod config;
 mod remnawave;
+mod ui;
 
 use config::Config;
 use remnawave::RemnawaveClient;
@@ -17,27 +18,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let bot = Bot::new(config.telegram_token);
 
-    let remnawave = RemnawaveClient::new(
-        config.remnawave_url,
-        config.remnawave_token,
-    );
+    let remnawave = RemnawaveClient::new(config.remnawave_url, config.remnawave_token);
 
-    tracing::info!("VPNBotTG started");
+    tracing::info!("VPNBotTG запущен");
 
     bot::run(bot, remnawave).await;
 
-    tracing::info!("VPNBotTG stopped");
+    tracing::info!("VPNBotTG остановлен");
 
     Ok(())
 }
 
 fn init_logging() {
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            EnvFilter::new("vpn_bot_tg=info,teloxide=info")
-        });
+        .unwrap_or_else(|_| EnvFilter::new("vpn_bot_tg=info,teloxide=info"));
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 }

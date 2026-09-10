@@ -1,31 +1,34 @@
 use teloxide::{
     dptree,
+    payloads::{SetMyDescriptionSetters, SetMyShortDescriptionSetters},
     prelude::*,
+    types::CallbackQuery,
     utils::command::BotCommands,
 };
 
-use crate::remnawave::{RemnawaveClient, RemnawaveUser};
+use crate::{
+    remnawave::{RemnawaveClient, RemnawaveUser},
+    ui,
+};
 
 #[derive(BotCommands, Clone)]
-#[command(
-    rename_rule = "lowercase",
-    description = "Доступные команды:"
-)]
+#[command(rename_rule = "lowercase")]
 enum Command {
-    /// Запустить бота.
+    /// Открыть главное меню.
     Start,
-
-    /// Показать список команд.
-    Help,
-
-    /// Проверить свою VPN-подписку.
-    Status,
 }
 
 pub async fn run(bot: Bot, remnawave: RemnawaveClient) {
-    let handler = Update::filter_message()
-        .filter_command::<Command>()
-        .endpoint(handle_command);
+    configure_profile(&bot).await;
+
+    let handler = dptree::entry()
+        .branch(
+            Update::filter_message()
+                .filter_command::<Command>()
+                .endpoint(handle_command),
+        )
+        .branch(Update::filter_callback_query().endpoint(handle_callback))
+        .branch(Update::filter_message().endpoint(handle_other_message));
 
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![remnawave])
@@ -35,106 +38,137 @@ pub async fn run(bot: Bot, remnawave: RemnawaveClient) {
         .await;
 }
 
-async fn handle_command(
-    bot: Bot,
-    msg: Message,
-    command: Command,
-    remnawave: RemnawaveClient,
-) -> ResponseResult<()> {
-    match command {
-        Command::Start => {
-            handle_start(bot, msg).await?;
-        }
-
-        Command::Help => {
-            bot.send_message(
-                msg.chat.id,
-                Command::descriptions().to_string(),
-            )
-            .await?;
-        }
-
-        Command::Status => {
-            handle_status(bot, msg, remnawave).await?;
-        }
-    }
-
-    Ok(())
-}
-
-async fn handle_start(
-    bot: Bot,
-    msg: Message,
-) -> ResponseResult<()> {
-    let telegram_id = msg
-        .from
-        .as_ref()
-        .map(|user| user.id.0);
-
-    let text = match telegram_id {
-        Some(id) => format!(
-            "VPN Bot запущен.\n\n\
-             Ваш Telegram ID: {id}\n\n\
-             Команда /status проверит VPN-подписку, \
-             привязанную к этому Telegram ID."
-        ),
-
-        None => String::from(
-            "VPN Bot запущен.\n\n\
-             Не удалось определить ваш Telegram ID."
-        ),
-    };
-
-    bot.send_message(msg.chat.id, text).await?;
-
-    Ok(())
-}
-
-async fn handle_status(
-    bot: Bot,
-    msg: Message,
-    remnawave: RemnawaveClient,
-) -> ResponseResult<()> {
-    if !msg.chat.is_private() {
-        bot.send_message(
-            msg.chat.id,
-            "Эта команда доступна только в личном чате с ботом.",
+async fn configure_profile(bot: &Bot) {
+    if let Err(error) = bot
+        .set_my_description()
+        .description(
+            "Управление VPN-подпиской прямо из Telegram.\n\n\
+             Проверяйте статус и трафик, получайте ссылку \
+             для подключения и управляйте доступом.",
         )
-        .await?;
-
-        return Ok(());
-    }
-
-    let Some(user) = msg.from.as_ref() else {
-        bot.send_message(
-            msg.chat.id,
-            "Не удалось определить ваш Telegram ID.",
-        )
-        .await?;
-
-        return Ok(());
-    };
-
-    let telegram_id = user.id.0;
-
-    match remnawave
-        .find_users_by_telegram_id(telegram_id)
         .await
     {
+        tracing::warn!(
+            error = %error,
+            "Failed to set Telegram bot description"
+        );
+    }
+
+    if let Err(error) = bot
+        .set_my_short_description()
+        .short_description("Личный кабинет VPN прямо в Telegram")
+        .await
+    {
+        tracing::warn!(
+            error = %error,
+            "Failed to set Telegram bot short description"
+        );
+    }
+
+    if let Err(error) = bot.delete_my_commands().await {
+        tracing::warn!(
+            error = %error,
+            "Failed to delete Telegram command menu"
+        );
+    }
+}
+
+async fn handle_command(bot: Bot, msg: Message, command: Command) -> ResponseResult<()> {
+    match command {
+        Command::Start => {
+            show_home(&bot, msg.chat.id).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_other_message(bot: Bot, msg: Message) -> ResponseResult<()> {
+    if !msg.chat.is_private() {
+        return Ok(());
+    }
+
+    show_home(&bot, msg.chat.id).await?;
+
+    Ok(())
+}
+
+async fn handle_callback(
+    bot: Bot,
+    query: CallbackQuery,
+    remnawave: RemnawaveClient,
+) -> ResponseResult<()> {
+    // Telegram рекомендует отвечать на callback,
+    // чтобы убрать индикатор загрузки у кнопки.
+    bot.answer_callback_query(query.id.clone()).await?;
+
+    let Some(data) = query.data.as_deref() else {
+        return Ok(());
+    };
+
+    let Some(message) = query.regular_message() else {
+        return Ok(());
+    };
+
+    if !message.chat.is_private() {
+        return Ok(());
+    }
+
+    match data {
+        ui::CALLBACK_HOME => {
+            edit_screen(&bot, message, ui::home_text(), ui::home_keyboard()).await?;
+        }
+
+        ui::CALLBACK_STATUS => {
+            show_status(&bot, message, query.from.id.0, &remnawave).await?;
+        }
+
+        ui::CALLBACK_SUBSCRIPTION => {
+            show_subscription(&bot, message, query.from.id.0, &remnawave).await?;
+        }
+
+        ui::CALLBACK_ABOUT => {
+            edit_screen(&bot, message, ui::about_text(), ui::back_keyboard()).await?;
+        }
+
+        _ => {
+            tracing::warn!(callback = data, "Unknown callback");
+        }
+    }
+
+    Ok(())
+}
+
+async fn show_home(bot: &Bot, chat_id: ChatId) -> ResponseResult<()> {
+    bot.send_message(chat_id, ui::home_text())
+        .reply_markup(ui::home_keyboard())
+        .await?;
+
+    Ok(())
+}
+
+async fn show_status(
+    bot: &Bot,
+    message: &Message,
+    telegram_id: u64,
+    remnawave: &RemnawaveClient,
+) -> ResponseResult<()> {
+    match remnawave.find_users_by_telegram_id(telegram_id).await {
         Ok(users) if users.is_empty() => {
-            bot.send_message(
-                msg.chat.id,
-                "VPN-подписка для вашего Telegram-аккаунта пока не найдена.",
+            edit_screen(
+                bot,
+                message,
+                "📋 Подписка\n\n\
+                 VPN-подписка для вашего Telegram-аккаунта не найдена.",
+                ui::back_keyboard(),
             )
             .await?;
         }
 
         Ok(users) => {
-            bot.send_message(
-                msg.chat.id,
-                format_users(&users),
-            )
-            .await?;
+            let text = format_status(&users);
+
+            edit_screen(bot, message, &text, ui::status_keyboard()).await?;
         }
 
         Err(error) => {
@@ -144,9 +178,12 @@ async fn handle_status(
                 "Remnawave API request failed"
             );
 
-            bot.send_message(
-                msg.chat.id,
-                "Не удалось получить информацию о подписке. Попробуйте позже.",
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Не удалось получить информацию о подписке.\n\n\
+                 Попробуйте ещё раз немного позже.",
+                ui::status_keyboard(),
             )
             .await?;
         }
@@ -155,23 +192,134 @@ async fn handle_status(
     Ok(())
 }
 
-fn format_users(users: &[RemnawaveUser]) -> String {
-    let mut message = String::from("Ваши VPN-подписки:\n");
+async fn show_subscription(
+    bot: &Bot,
+    message: &Message,
+    telegram_id: u64,
+    remnawave: &RemnawaveClient,
+) -> ResponseResult<()> {
+    match remnawave.find_users_by_telegram_id(telegram_id).await {
+        Ok(users) if users.is_empty() => {
+            edit_screen(
+                bot,
+                message,
+                "🔑 Ссылка подписки\n\n\
+                 Активная VPN-подписка не найдена.",
+                ui::back_keyboard(),
+            )
+            .await?;
+        }
 
-    for (index, user) in users.iter().enumerate() {
-        message.push_str(&format!(
-            "\n{}. {}\n\
-             Статус: {}\n\
-             Действует до: {}\n\
-             Ссылка подписки:\n{}\
-             \n",
-            index + 1,
-            user.username,
-            user.status,
-            user.expire_at,
-            user.subscription_url,
+        Ok(users) => {
+            let mut text = String::from("🔑 Ссылка подписки\n\n");
+
+            for user in users {
+                text.push_str(&format!("{}\n{}\n\n", user.username, user.subscription_url,));
+            }
+
+            text.push_str(
+                "⚠️ Не передавайте эту ссылку другим людям. \
+                 Она предоставляет доступ к вашей VPN-подписке.",
+            );
+
+            edit_screen(bot, message, &text, ui::back_keyboard()).await?;
+        }
+
+        Err(error) => {
+            tracing::error!(
+                telegram_id,
+                error = %error,
+                "Remnawave API request failed"
+            );
+
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Не удалось получить ссылку подписки.",
+                ui::back_keyboard(),
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn edit_screen(
+    bot: &Bot,
+    message: &Message,
+    text: &str,
+    keyboard: teloxide::types::InlineKeyboardMarkup,
+) -> ResponseResult<()> {
+    match bot
+        .edit_message_text(
+            message.chat.id,
+            message.id,
+            text,
+        )
+        .reply_markup(keyboard)
+        .await
+    {
+        Ok(_) => Ok(()),
+
+        Err(teloxide::RequestError::Api(
+            teloxide::ApiError::MessageNotModified,
+        )) => Ok(()),
+
+        Err(error) => Err(error),
+    }
+}
+
+fn format_status(users: &[RemnawaveUser]) -> String {
+    let mut text = String::from("📋 Моя подписка\n");
+
+    for user in users {
+        let status_icon = match user.status.as_str() {
+            "ACTIVE" => "🟢",
+            "DISABLED" => "🔴",
+            "LIMITED" => "🟠",
+            "EXPIRED" => "⚫",
+            _ => "⚪",
+        };
+
+        let used = format_bytes(user.user_traffic.used_traffic_bytes);
+
+        let limit = if user.traffic_limit_bytes == 0 {
+            String::from("Без лимита")
+        } else {
+            format_bytes(user.traffic_limit_bytes)
+        };
+
+        text.push_str(&format!(
+            "\n{status_icon} Статус: {}\n\
+             👤 {}\n\
+             📅 До: {}\n\
+             📊 Использовано: {}\n\
+             📦 Лимит: {}\n",
+            user.status, user.username, user.expire_at, used, limit,
         ));
     }
 
-    message
+    text
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    const TB: f64 = GB * 1024.0;
+
+    let bytes = bytes as f64;
+
+    if bytes >= TB {
+        format!("{:.2} TB", bytes / TB)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes / GB)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes / MB)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes / KB)
+    } else {
+        format!("{bytes:.0} B")
+    }
 }
