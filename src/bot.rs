@@ -8,6 +8,7 @@ use teloxide::{
 
 use crate::{
     remnawave::{RemnawaveClient, RemnawaveUser},
+    trial::{TrialIssueResult, TrialService},
     ui,
 };
 
@@ -18,7 +19,7 @@ enum Command {
     Start,
 }
 
-pub async fn run(bot: Bot, remnawave: RemnawaveClient) {
+pub async fn run(bot: Bot, remnawave: RemnawaveClient, trial: TrialService) {
     configure_profile(&bot).await;
 
     let handler = dptree::entry()
@@ -31,7 +32,7 @@ pub async fn run(bot: Bot, remnawave: RemnawaveClient) {
         .branch(Update::filter_message().endpoint(handle_other_message));
 
     Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![remnawave])
+        .dependencies(dptree::deps![remnawave, trial])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
@@ -97,6 +98,7 @@ async fn handle_callback(
     bot: Bot,
     query: CallbackQuery,
     remnawave: RemnawaveClient,
+    trial: TrialService,
 ) -> ResponseResult<()> {
     // Telegram рекомендует отвечать на callback,
     // чтобы убрать индикатор загрузки у кнопки.
@@ -131,8 +133,94 @@ async fn handle_callback(
             edit_screen(&bot, message, ui::about_text(), ui::back_keyboard()).await?;
         }
 
+        ui::CALLBACK_TRIAL => {
+            show_trial(&bot, message, query.from.id.0, &trial).await?;
+        }
+
         _ => {
             tracing::warn!(callback = data, "Unknown callback");
+        }
+    }
+
+    Ok(())
+}
+
+async fn show_trial(
+    bot: &Bot,
+    message: &Message,
+    telegram_id: u64,
+    trial: &TrialService,
+) -> ResponseResult<()> {
+    match trial.issue_trial(telegram_id).await {
+        Ok(TrialIssueResult::Created(user) | TrialIssueResult::Recovered(user)) => {
+            let text = format!(
+                "🎉 Пробная подписка активирована!\n\n\
+                 📅 Срок: 3 дня\n\
+                 📊 Трафик: 50 GiB\n\
+                 📱 Устройства: до 2\n\
+                 ⏳ Действует до: {}\n\n\
+                 Теперь можно получить ссылку \
+                 для подключения.",
+                user.expire_at,
+            );
+
+            edit_screen(bot, message, &text, ui::trial_keyboard()).await?;
+        }
+
+        Ok(TrialIssueResult::AlreadyUsed) => {
+            edit_screen(
+                bot,
+                message,
+                "🎁 Пробный период уже был использован.\n\n\
+                 Повторное получение бесплатной \
+                 подписки недоступно.",
+                ui::back_keyboard(),
+            )
+            .await?;
+        }
+
+        Ok(TrialIssueResult::Ineligible) => {
+            edit_screen(
+                bot,
+                message,
+                "🎁 Пробный период доступен только \
+                 новым пользователям.\n\n\
+                 Для этого Telegram-аккаунта уже \
+                 существует или ранее существовала \
+                 VPN-подписка.",
+                ui::back_keyboard(),
+            )
+            .await?;
+        }
+
+        Ok(TrialIssueResult::InProgress) => {
+            edit_screen(
+                bot,
+                message,
+                "⏳ Пробная подписка уже создаётся.\n\n\
+                 Подождите несколько секунд и \
+                 повторите попытку.",
+                ui::back_keyboard(),
+            )
+            .await?;
+        }
+
+        Err(error) => {
+            tracing::error!(
+                telegram_id,
+                error = %error,
+                "Не удалось создать trial"
+            );
+
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Не удалось создать пробную \
+                 подписку.\n\n\
+                 Попробуйте ещё раз немного позже.",
+                ui::back_keyboard(),
+            )
+            .await?;
         }
     }
 

@@ -4,6 +4,7 @@ pub const CALLBACK_HOME: &str = "home";
 pub const CALLBACK_STATUS: &str = "status";
 pub const CALLBACK_SUBSCRIPTION: &str = "subscription";
 pub const CALLBACK_ABOUT: &str = "about";
+pub const CALLBACK_TRIAL: &str = "trial";
 
 pub fn home_text() -> &'static str {
     "🛡 SilentOkVPN\n\n\
@@ -14,6 +15,10 @@ pub fn home_text() -> &'static str {
 pub fn home_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new([
         vec![InlineKeyboardButton::callback(
+            "🎁 Попробовать бесплатно",
+            CALLBACK_TRIAL,
+        )],
+        vec![InlineKeyboardButton::callback(
             "📋 Моя подписка",
             CALLBACK_STATUS,
         )],
@@ -21,6 +26,20 @@ pub fn home_keyboard() -> InlineKeyboardMarkup {
             InlineKeyboardButton::callback("🔑 Ссылка", CALLBACK_SUBSCRIPTION),
             InlineKeyboardButton::callback("ℹ️ О сервисе", CALLBACK_ABOUT),
         ],
+    ])
+}
+
+pub fn trial_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new([
+        vec![InlineKeyboardButton::callback(
+            "📋 Моя подписка",
+            CALLBACK_STATUS,
+        )],
+        vec![InlineKeyboardButton::callback(
+            "🔑 Получить ссылку",
+            CALLBACK_SUBSCRIPTION,
+        )],
+        vec![InlineKeyboardButton::callback("⬅️ Назад", CALLBACK_HOME)],
     ])
 }
 

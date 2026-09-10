@@ -1,12 +1,16 @@
 mod bot;
 mod config;
+mod database;
 mod remnawave;
+mod trial;
 mod ui;
 
 use config::Config;
+use database::Database;
 use remnawave::RemnawaveClient;
 use teloxide::Bot;
 use tracing_subscriber::EnvFilter;
+use trial::TrialService;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,13 +20,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::from_env()?;
 
-    let bot = Bot::new(config.telegram_token);
+    let database = Database::connect(&config.database_url).await?;
+    tracing::info!("PostgreSQL подключён");
 
-    let remnawave = RemnawaveClient::new(config.remnawave_url, config.remnawave_token);
+    let bot = Bot::new(config.telegram_token.clone());
+
+    let remnawave =
+        RemnawaveClient::new(config.remnawave_url.clone(), config.remnawave_token.clone());
+
+    let trial = TrialService::new(database, remnawave.clone(), config.trial.clone()).await?;
 
     tracing::info!("VPNBotTG запущен");
 
-    bot::run(bot, remnawave).await;
+    bot::run(bot, remnawave, trial).await;
 
     tracing::info!("VPNBotTG остановлен");
 
