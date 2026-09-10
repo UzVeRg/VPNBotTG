@@ -203,7 +203,7 @@ async fn show_subscription(
             edit_screen(
                 bot,
                 message,
-                "🔑 Ссылка подписки\n\n\
+                "🔑 Ссылка на подписку\n\n\
                  Активная VPN-подписка не найдена.",
                 ui::back_keyboard(),
             )
@@ -252,19 +252,13 @@ async fn edit_screen(
     keyboard: teloxide::types::InlineKeyboardMarkup,
 ) -> ResponseResult<()> {
     match bot
-        .edit_message_text(
-            message.chat.id,
-            message.id,
-            text,
-        )
+        .edit_message_text(message.chat.id, message.id, text)
         .reply_markup(keyboard)
         .await
     {
         Ok(_) => Ok(()),
 
-        Err(teloxide::RequestError::Api(
-            teloxide::ApiError::MessageNotModified,
-        )) => Ok(()),
+        Err(teloxide::RequestError::Api(teloxide::ApiError::MessageNotModified)) => Ok(()),
 
         Err(error) => Err(error),
     }
@@ -293,7 +287,7 @@ fn format_status(users: &[RemnawaveUser]) -> String {
         text.push_str(&format!(
             "\n{status_icon} Статус: {}\n\
              👤 {}\n\
-             📅 До: {}\n\
+             📅 Действует до: {}\n\
              📊 Использовано: {}\n\
              📦 Лимит: {}\n",
             user.status, user.username, user.expire_at, used, limit,
