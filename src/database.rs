@@ -40,9 +40,7 @@ impl Database {
                 hwid_limit,
                 internal_squad_names,
                 is_active,
-                sort_order,
-                created_at,
-                updated_at
+                sort_order
             FROM tariffs
             WHERE is_active = TRUE
             ORDER BY sort_order ASC, price_kopecks ASC
