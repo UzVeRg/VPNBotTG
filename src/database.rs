@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
 use thiserror::Error;
 
 #[derive(Clone)]
@@ -25,6 +25,97 @@ impl Database {
         sqlx::migrate!().run(&pool).await?;
 
         Ok(Self { pool })
+    }
+
+    pub async fn ensure_user(&self, telegram_id: u64) -> Result<UserProfile, DatabaseError> {
+        let telegram_id =
+            i64::try_from(telegram_id).map_err(|_| DatabaseError::InvalidTelegramId)?;
+
+        let user = sqlx::query_as::<_, UserProfile>(
+            r#"
+            INSERT INTO users (
+                telegram_id
+            )
+            VALUES ($1)
+            ON CONFLICT (telegram_id)
+            DO UPDATE SET
+                telegram_id = EXCLUDED.telegram_id
+            RETURNING
+                telegram_id,
+                remnawave_user_id,
+                registered_at,
+                current_tariff_code,
+                status,
+                updated_at
+            "#,
+        )
+        .bind(telegram_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(user)
+    }
+
+    pub async fn set_user_subscription(
+        &self,
+        telegram_id: u64,
+        remnawave_user_id: i64,
+        tariff_code: &str,
+    ) -> Result<(), DatabaseError> {
+        let telegram_id =
+            i64::try_from(telegram_id).map_err(|_| DatabaseError::InvalidTelegramId)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO users (
+                telegram_id,
+                remnawave_user_id,
+                current_tariff_code
+            )
+            VALUES ($1, $2, $3)
+            ON CONFLICT (telegram_id)
+            DO UPDATE SET
+                remnawave_user_id = EXCLUDED.remnawave_user_id,
+                current_tariff_code = EXCLUDED.current_tariff_code,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(telegram_id)
+        .bind(remnawave_user_id)
+        .bind(tariff_code)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn link_remnawave_user(
+        &self,
+        telegram_id: u64,
+        remnawave_user_id: i64,
+    ) -> Result<(), DatabaseError> {
+        let telegram_id =
+            i64::try_from(telegram_id).map_err(|_| DatabaseError::InvalidTelegramId)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO users (
+                telegram_id,
+                remnawave_user_id
+            )
+            VALUES ($1, $2)
+            ON CONFLICT (telegram_id)
+            DO UPDATE SET
+                remnawave_user_id = EXCLUDED.remnawave_user_id,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(telegram_id)
+        .bind(remnawave_user_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 
     pub async fn claim_trial(&self, telegram_id: i64) -> Result<TrialClaimDecision, DatabaseError> {
@@ -157,6 +248,16 @@ impl Database {
     }
 }
 
+#[derive(Debug, Clone, FromRow)]
+pub struct UserProfile {
+    pub telegram_id: i64,
+    pub remnawave_user_id: Option<i64>,
+    pub registered_at: DateTime<Utc>,
+    pub current_tariff_code: Option<String>,
+    pub status: String,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Error)]
 pub enum DatabaseError {
     #[error("ошибка PostgreSQL: {0}")]
@@ -167,4 +268,7 @@ pub enum DatabaseError {
 
     #[error("неизвестное состояние trial: {0}")]
     UnknownTrialStatus(String),
+
+    #[error("Telegram ID не помещается в BIGINT")]
+    InvalidTelegramId,
 }

@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+
 use teloxide::{
     dptree,
     payloads::{SetMyDescriptionSetters, SetMyShortDescriptionSetters},
@@ -7,12 +9,11 @@ use teloxide::{
 };
 
 use crate::{
+    database::Database,
     remnawave::{RemnawaveClient, RemnawaveUser},
     trial::{TrialIssueResult, TrialService},
     ui,
 };
-
-use chrono::{DateTime, Utc};
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
@@ -21,7 +22,7 @@ enum Command {
     Start,
 }
 
-pub async fn run(bot: Bot, remnawave: RemnawaveClient, trial: TrialService) {
+pub async fn run(bot: Bot, remnawave: RemnawaveClient, trial: TrialService, database: Database) {
     configure_profile(&bot).await;
 
     let handler = dptree::entry()
@@ -34,7 +35,7 @@ pub async fn run(bot: Bot, remnawave: RemnawaveClient, trial: TrialService) {
         .branch(Update::filter_message().endpoint(handle_other_message));
 
     Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![remnawave, trial])
+        .dependencies(dptree::deps![remnawave, trial, database])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
@@ -76,7 +77,18 @@ async fn configure_profile(bot: &Bot) {
     }
 }
 
-async fn handle_command(bot: Bot, msg: Message, command: Command) -> ResponseResult<()> {
+async fn handle_command(
+    bot: Bot,
+    msg: Message,
+    command: Command,
+    database: Database,
+) -> ResponseResult<()> {
+    if !msg.chat.is_private() {
+        return Ok(());
+    }
+
+    register_message_user(&database, &msg).await;
+
     match command {
         Command::Start => {
             show_home(&bot, msg.chat.id).await?;
@@ -86,10 +98,12 @@ async fn handle_command(bot: Bot, msg: Message, command: Command) -> ResponseRes
     Ok(())
 }
 
-async fn handle_other_message(bot: Bot, msg: Message) -> ResponseResult<()> {
+async fn handle_other_message(bot: Bot, msg: Message, database: Database) -> ResponseResult<()> {
     if !msg.chat.is_private() {
         return Ok(());
     }
+
+    register_message_user(&database, &msg).await;
 
     show_home(&bot, msg.chat.id).await?;
 
@@ -101,6 +115,7 @@ async fn handle_callback(
     query: CallbackQuery,
     remnawave: RemnawaveClient,
     trial: TrialService,
+    database: Database,
 ) -> ResponseResult<()> {
     // Telegram рекомендует отвечать на callback,
     // чтобы убрать индикатор загрузки у кнопки.
@@ -117,6 +132,8 @@ async fn handle_callback(
     if !message.chat.is_private() {
         return Ok(());
     }
+
+    register_user(&database, query.from.id.0).await;
 
     match data {
         ui::CALLBACK_HOME => {
@@ -149,6 +166,24 @@ async fn handle_callback(
     Ok(())
 }
 
+async fn register_message_user(database: &Database, message: &Message) {
+    let Some(user) = message.from.as_ref() else {
+        return;
+    };
+
+    register_user(database, user.id.0).await;
+}
+
+async fn register_user(database: &Database, telegram_id: u64) {
+    if let Err(error) = database.ensure_user(telegram_id).await {
+        tracing::error!(
+            telegram_id,
+            error = %error,
+            "Не удалось зарегистрировать пользователя в PostgreSQL"
+        );
+    }
+}
+
 async fn show_trial(
     bot: &Bot,
     message: &Message,
@@ -158,6 +193,7 @@ async fn show_trial(
     match trial.issue_trial(telegram_id).await {
         Ok(TrialIssueResult::Created(user) | TrialIssueResult::Recovered(user)) => {
             let config = trial.config();
+
             let expires_at = format_datetime(&user.expire_at);
 
             let text = format!(
@@ -169,6 +205,7 @@ async fn show_trial(
                  Теперь можно получить ссылку для подключения.",
                 config.days, config.traffic_gib, config.hwid_limit, expires_at,
             );
+
             edit_screen(bot, message, &text, ui::trial_keyboard()).await?;
         }
 
@@ -376,13 +413,15 @@ fn format_status(users: &[RemnawaveUser]) -> String {
         } else {
             format_bytes(user.traffic_limit_bytes)
         };
+
         let expires_at = format_datetime(&user.expire_at);
+
         text.push_str(&format!(
             "\n{status_icon} Статус: {}\n\
-             👤 {}\n\
-             📅 Действует до: {}\n\
-             📊 Использовано: {}\n\
-             📦 Лимит: {}\n",
+                 👤 {}\n\
+                 📅 Действует до: {}\n\
+                 📊 Использовано: {}\n\
+                 📦 Лимит: {}\n",
             user.status, user.username, expires_at, used, limit,
         ));
     }
@@ -392,20 +431,23 @@ fn format_status(users: &[RemnawaveUser]) -> String {
 
 fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
+
     const MB: f64 = KB * 1024.0;
+
     const GB: f64 = MB * 1024.0;
+
     const TB: f64 = GB * 1024.0;
 
     let bytes = bytes as f64;
 
     if bytes >= TB {
-        format!("{:.2} TB", bytes / TB)
+        format!("{:.2} TB", bytes / TB,)
     } else if bytes >= GB {
-        format!("{:.2} GB", bytes / GB)
+        format!("{:.2} GB", bytes / GB,)
     } else if bytes >= MB {
-        format!("{:.2} MB", bytes / MB)
+        format!("{:.2} MB", bytes / MB,)
     } else if bytes >= KB {
-        format!("{:.2} KB", bytes / KB)
+        format!("{:.2} KB", bytes / KB,)
     } else {
         format!("{bytes:.0} B")
     }

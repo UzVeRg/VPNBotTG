@@ -56,9 +56,14 @@ impl TrialService {
     }
 
     pub async fn issue_trial(&self, telegram_id: u64) -> Result<TrialIssueResult, TrialError> {
+        // Сначала гарантируем существование профиля пользователя
+        // в нашей собственной БД.
+        self.database.ensure_user(telegram_id).await?;
+
         let database_telegram_id =
             i64::try_from(telegram_id).map_err(|_| TrialError::InvalidTelegramId)?;
 
+        // Резервируем право на trial.
         match self.database.claim_trial(database_telegram_id).await? {
             TrialClaimDecision::AlreadyUsed => {
                 return Ok(TrialIssueResult::AlreadyUsed);
@@ -75,6 +80,8 @@ impl TrialService {
             TrialClaimDecision::Acquired => {}
         }
 
+        // Проверяем, существует ли уже пользователь
+        // с этим Telegram ID в Remnawave.
         let users = match self.remnawave.find_users_by_telegram_id(telegram_id).await {
             Ok(users) => users,
 
@@ -85,6 +92,8 @@ impl TrialService {
             }
         };
 
+        // Если в Remnawave уже существует TRIAL,
+        // восстанавливаем связь с нашей БД.
         if let Some(existing_trial) = users
             .iter()
             .find(|user| user.tag.as_deref() == Some("TRIAL"))
@@ -95,6 +104,10 @@ impl TrialService {
                 .mark_trial_active(database_telegram_id, existing_trial.id, expires_at)
                 .await?;
 
+            self.database
+                .set_user_subscription(telegram_id, existing_trial.id, "trial")
+                .await?;
+
             if existing_trial.status == "ACTIVE" && expires_at > Utc::now() {
                 return Ok(TrialIssueResult::Recovered(existing_trial.clone()));
             }
@@ -102,7 +115,26 @@ impl TrialService {
             return Ok(TrialIssueResult::AlreadyUsed);
         }
 
+        // Если Remnawave-пользователь уже есть,
+        // но это не trial, бесплатную подписку не выдаём.
         if !users.is_empty() {
+            // Если пользователь только один,
+            // безопасно связываем его с нашим профилем.
+            if users.len() == 1 {
+                self.database
+                    .link_remnawave_user(telegram_id, users[0].id)
+                    .await?;
+            } else {
+                // Если записей несколько, автоматически выбирать
+                // одну из них нельзя.
+                tracing::warn!(
+                    telegram_id,
+                    count = users.len(),
+                    "Найдено несколько Remnawave-пользователей; \
+                     автоматическая привязка пропущена"
+                );
+            }
+
             self.database
                 .mark_trial_ineligible(database_telegram_id)
                 .await?;
@@ -110,6 +142,8 @@ impl TrialService {
             return Ok(TrialIssueResult::Ineligible);
         }
 
+        // Пользователь новый.
+        // Создаём настоящую trial-подписку.
         let expires_at = Utc::now() + Duration::days(self.config.days);
 
         let traffic_limit_bytes = self
@@ -142,18 +176,25 @@ impl TrialService {
 
         match self.remnawave.create_user(&request).await {
             Ok(user) => {
+                // Фиксируем факт использования trial.
                 self.database
                     .mark_trial_active(database_telegram_id, user.id, expires_at)
+                    .await?;
+
+                // Обновляем полноценный профиль пользователя.
+                self.database
+                    .set_user_subscription(telegram_id, user.id, "trial")
                     .await?;
 
                 Ok(TrialIssueResult::Created(user))
             }
 
             Err(create_error) => {
-                // Запрос мог реально создать пользователя,
-                // но соединение могло оборваться до ответа.
-                // Поэтому перед разрешением повторной попытки
-                // проверяем Remnawave ещё раз.
+                // POST мог реально создать пользователя,
+                // но соединение могло оборваться до получения ответа.
+                //
+                // Поэтому сначала повторно ищем пользователя
+                // и только потом разрешаем повторную попытку.
                 if let Ok(users) = self.remnawave.find_users_by_telegram_id(telegram_id).await {
                     if let Some(user) = users
                         .into_iter()
@@ -163,6 +204,10 @@ impl TrialService {
 
                         self.database
                             .mark_trial_active(database_telegram_id, user.id, recovered_expiration)
+                            .await?;
+
+                        self.database
+                            .set_user_subscription(telegram_id, user.id, "trial")
                             .await?;
 
                         return Ok(TrialIssueResult::Recovered(user));

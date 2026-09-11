@@ -21,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
 
     let database = Database::connect(&config.database_url).await?;
+
     tracing::info!("PostgreSQL подключён");
 
     let bot = Bot::new(config.telegram_token.clone());
@@ -28,11 +29,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let remnawave =
         RemnawaveClient::new(config.remnawave_url.clone(), config.remnawave_token.clone());
 
-    let trial = TrialService::new(database, remnawave.clone(), config.trial.clone()).await?;
+    let trial =
+        TrialService::new(database.clone(), remnawave.clone(), config.trial.clone()).await?;
 
     tracing::info!("VPNBotTG запущен");
 
-    bot::run(bot, remnawave, trial).await;
+    bot::run(bot, remnawave, trial, database).await;
 
     tracing::info!("VPNBotTG остановлен");
 
