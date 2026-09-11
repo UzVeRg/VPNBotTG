@@ -1,3 +1,4 @@
+use crate::tariff::Tariff;
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
 use thiserror::Error;
@@ -25,6 +26,58 @@ impl Database {
         sqlx::migrate!().run(&pool).await?;
 
         Ok(Self { pool })
+    }
+
+    pub async fn get_active_tariffs(&self) -> Result<Vec<Tariff>, DatabaseError> {
+        let tariffs = sqlx::query_as::<_, Tariff>(
+            r#"
+            SELECT
+                code,
+                name,
+                price_kopecks,
+                duration_days,
+                traffic_gib,
+                hwid_limit,
+                internal_squad_names,
+                is_active,
+                sort_order,
+                created_at,
+                updated_at
+            FROM tariffs
+            WHERE is_active = TRUE
+            ORDER BY sort_order ASC, price_kopecks ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(tariffs)
+    }
+
+    pub async fn get_tariff(&self, code: &str) -> Result<Option<Tariff>, DatabaseError> {
+        let tariff = sqlx::query_as::<_, Tariff>(
+            r#"
+            SELECT
+                code,
+                name,
+                price_kopecks,
+                duration_days,
+                traffic_gib,
+                hwid_limit,
+                internal_squad_names,
+                is_active,
+                sort_order,
+                created_at,
+                updated_at
+            FROM tariffs
+            WHERE code = $1
+            "#,
+        )
+        .bind(code)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(tariff)
     }
 
     pub async fn ensure_user(&self, telegram_id: u64) -> Result<UserProfile, DatabaseError> {

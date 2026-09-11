@@ -2,6 +2,7 @@ mod bot;
 mod config;
 mod database;
 mod remnawave;
+mod tariff;
 mod trial;
 mod ui;
 
