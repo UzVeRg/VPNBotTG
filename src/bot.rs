@@ -12,6 +12,8 @@ use crate::{
     ui,
 };
 
+use chrono::{DateTime, Utc};
+
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 enum Command {
@@ -130,7 +132,9 @@ async fn handle_callback(
         }
 
         ui::CALLBACK_ABOUT => {
-            edit_screen(&bot, message, ui::about_text(), ui::back_keyboard()).await?;
+            let text = ui::about_text(trial.config());
+
+            edit_screen(&bot, message, &text, ui::back_keyboard()).await?;
         }
 
         ui::CALLBACK_TRIAL => {
@@ -153,17 +157,18 @@ async fn show_trial(
 ) -> ResponseResult<()> {
     match trial.issue_trial(telegram_id).await {
         Ok(TrialIssueResult::Created(user) | TrialIssueResult::Recovered(user)) => {
+            let config = trial.config();
+            let expires_at = format_datetime(&user.expire_at);
+
             let text = format!(
                 "🎉 Пробная подписка активирована!\n\n\
-                 📅 Срок: 3 дня\n\
-                 📊 Трафик: 50 GiB\n\
-                 📱 Устройства: до 2\n\
+                 📅 Срок: {} дн.\n\
+                 📊 Трафик: {} GiB\n\
+                 📱 Устройства: до {}\n\
                  ⏳ Действует до: {}\n\n\
-                 Теперь можно получить ссылку \
-                 для подключения.",
-                user.expire_at,
+                 Теперь можно получить ссылку для подключения.",
+                config.days, config.traffic_gib, config.hwid_limit, expires_at,
             );
-
             edit_screen(bot, message, &text, ui::trial_keyboard()).await?;
         }
 
@@ -371,14 +376,14 @@ fn format_status(users: &[RemnawaveUser]) -> String {
         } else {
             format_bytes(user.traffic_limit_bytes)
         };
-
+        let expires_at = format_datetime(&user.expire_at);
         text.push_str(&format!(
             "\n{status_icon} Статус: {}\n\
              👤 {}\n\
              📅 Действует до: {}\n\
              📊 Использовано: {}\n\
              📦 Лимит: {}\n",
-            user.status, user.username, user.expire_at, used, limit,
+            user.status, user.username, expires_at, used, limit,
         ));
     }
 
@@ -403,5 +408,16 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.2} KB", bytes / KB)
     } else {
         format!("{bytes:.0} B")
+    }
+}
+
+fn format_datetime(value: &str) -> String {
+    match DateTime::parse_from_rfc3339(value) {
+        Ok(datetime) => datetime
+            .with_timezone(&Utc)
+            .format("%d.%m.%Y %H:%M UTC")
+            .to_string(),
+
+        Err(_) => value.to_owned(),
     }
 }

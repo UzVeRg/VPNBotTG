@@ -51,6 +51,10 @@ impl TrialService {
         })
     }
 
+    pub fn config(&self) -> &TrialConfig {
+        &self.config
+    }
+
     pub async fn issue_trial(&self, telegram_id: u64) -> Result<TrialIssueResult, TrialError> {
         let database_telegram_id =
             i64::try_from(telegram_id).map_err(|_| TrialError::InvalidTelegramId)?;
