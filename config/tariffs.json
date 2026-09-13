@@ -1,7 +1,7 @@
 [
   {
-    "code": "monthlyFULL",
-    "name": "1 месяц",
+    "code": "monthly_full",
+    "name": "1 месяц — полный",
     "price_kopecks": 25000,
     "duration_days": 30,
     "traffic_gib": null,
@@ -13,16 +13,16 @@
     "sort_order": 10
   },
   {
-    "code": "monthlyFULL-NoHYSTERIA",
-    "name": "1 месяц",
+    "code": "monthly_no_hysteria",
+    "name": "1 месяц — без Hysteria2",
     "price_kopecks": 20000,
     "duration_days": 30,
     "traffic_gib": null,
     "hwid_limit": 5,
     "internal_squad_names": [
-      "FULL"
+      "NonFULL--HYSTERIA"
     ],
     "is_active": true,
-    "sort_order": 10
+    "sort_order": 20
   }
 ]
