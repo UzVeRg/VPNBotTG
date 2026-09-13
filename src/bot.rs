@@ -61,7 +61,7 @@ async fn configure_profile(bot: &Bot) {
     {
         tracing::warn!(
             error = %error,
-            "Failed to set Telegram bot description"
+            "Не удалось установить описание Telegram-бота"
         );
     }
 
@@ -72,14 +72,14 @@ async fn configure_profile(bot: &Bot) {
     {
         tracing::warn!(
             error = %error,
-            "Failed to set Telegram bot short description"
+            "Не удалось установить краткое описание Telegram-бота"
         );
     }
 
     if let Err(error) = bot.delete_my_commands().await {
         tracing::warn!(
             error = %error,
-            "Failed to delete Telegram command menu"
+            "Не удалось удалить командное меню Telegram"
         );
     }
 }
@@ -123,6 +123,7 @@ async fn handle_callback(
     remnawave: RemnawaveClient,
     trial: TrialService,
     database: Database,
+    tariffs: TariffCatalog,
 ) -> ResponseResult<()> {
     // Telegram рекомендует отвечать на callback,
     // чтобы убрать индикатор загрузки у кнопки.
@@ -141,6 +142,12 @@ async fn handle_callback(
     }
 
     register_user(&database, query.from.id.0).await;
+
+    if let Some(code) = data.strip_prefix(ui::CALLBACK_TARIFF_PREFIX) {
+        show_tariff(&bot, message, code, &tariffs).await?;
+
+        return Ok(());
+    }
 
     match data {
         ui::CALLBACK_HOME => {
@@ -165,8 +172,12 @@ async fn handle_callback(
             show_trial(&bot, message, query.from.id.0, &trial).await?;
         }
 
+        ui::CALLBACK_BUY => {
+            show_tariffs(&bot, message, &tariffs).await?;
+        }
+
         _ => {
-            tracing::warn!(callback = data, "Unknown callback");
+            tracing::warn!(callback = data, "Неизвестный callback");
         }
     }
 
@@ -189,6 +200,36 @@ async fn register_user(database: &Database, telegram_id: u64) {
             "Не удалось зарегистрировать пользователя в PostgreSQL"
         );
     }
+}
+
+async fn show_tariffs(bot: &Bot, message: &Message, tariffs: &TariffCatalog) -> ResponseResult<()> {
+    let text = ui::tariffs_text(tariffs);
+    let keyboard = ui::tariffs_keyboard(tariffs);
+
+    edit_screen(bot, message, &text, keyboard).await
+}
+
+async fn show_tariff(
+    bot: &Bot,
+    message: &Message,
+    code: &str,
+    tariffs: &TariffCatalog,
+) -> ResponseResult<()> {
+    let Some(tariff) = tariffs.get_active(code) else {
+        edit_screen(
+            bot,
+            message,
+            "⚠️ Этот тариф больше недоступен.",
+            ui::tariffs_keyboard(tariffs),
+        )
+        .await?;
+
+        return Ok(());
+    };
+
+    let text = ui::tariff_text(tariff);
+
+    edit_screen(bot, message, &text, ui::tariff_keyboard()).await
 }
 
 async fn show_trial(
