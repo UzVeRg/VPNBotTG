@@ -9,6 +9,7 @@ mod ui;
 use config::Config;
 use database::Database;
 use remnawave::RemnawaveClient;
+use tariff::TariffCatalog;
 use teloxide::Bot;
 use tracing_subscriber::EnvFilter;
 use trial::TrialService;
@@ -20,6 +21,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
 
     let config = Config::from_env()?;
+
+    let tariffs = TariffCatalog::load("config/tariffs.json")?;
+
+    tracing::info!(
+        tariffs = tariffs.len(),
+        active_tariffs = tariffs.active().count(),
+        "Каталог тарифов загружен"
+    );
 
     let database = Database::connect(&config.database_url).await?;
 
@@ -35,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("VPNBotTG запущен");
 
-    bot::run(bot, remnawave, trial, database).await;
+    bot::run(bot, remnawave, trial, database, tariffs).await;
 
     tracing::info!("VPNBotTG остановлен");
 

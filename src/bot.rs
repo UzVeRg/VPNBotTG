@@ -11,6 +11,7 @@ use teloxide::{
 use crate::{
     database::Database,
     remnawave::{RemnawaveClient, RemnawaveUser},
+    tariff::TariffCatalog,
     trial::{TrialIssueResult, TrialService},
     ui,
 };
@@ -22,7 +23,13 @@ enum Command {
     Start,
 }
 
-pub async fn run(bot: Bot, remnawave: RemnawaveClient, trial: TrialService, database: Database) {
+pub async fn run(
+    bot: Bot,
+    remnawave: RemnawaveClient,
+    trial: TrialService,
+    database: Database,
+    tariffs: TariffCatalog,
+) {
     configure_profile(&bot).await;
 
     let handler = dptree::entry()
@@ -35,7 +42,7 @@ pub async fn run(bot: Bot, remnawave: RemnawaveClient, trial: TrialService, data
         .branch(Update::filter_message().endpoint(handle_other_message));
 
     Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![remnawave, trial, database])
+        .dependencies(dptree::deps![remnawave, trial, database, tariffs])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
