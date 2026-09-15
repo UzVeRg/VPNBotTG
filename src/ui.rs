@@ -15,6 +15,7 @@ pub const CALLBACK_SUPPORT: &str = "support";
 pub const CALLBACK_DOCUMENTS: &str = "documents";
 pub const CALLBACK_TARIFF_PREFIX: &str = "tariff:";
 pub const CALLBACK_CHECKOUT_PREFIX: &str = "checkout:";
+pub const CALLBACK_PAYMENT_PREFIX: &str = "payment:";
 
 pub fn home_text() -> &'static str {
     "🛡 SilentOkVPN\n\n\

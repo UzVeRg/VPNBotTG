@@ -15,6 +15,14 @@ pub enum TrialClaimDecision {
     InProgress,
 }
 
+#[derive(Debug)]
+pub enum MarkPaymentPaidResult {
+    Applied,
+    AlreadyPaid,
+    OrderNotPayable,
+    NotFound,
+}
+
 impl Database {
     pub async fn connect(database_url: &str) -> Result<Self, DatabaseError> {
         let pool = PgPoolOptions::new()
@@ -410,6 +418,225 @@ impl Database {
 
         Ok(order)
     }
+
+    pub async fn create_payment(&self, new_payment: NewPayment) -> Result<Payment, DatabaseError> {
+        let payment = sqlx::query_as::<_, Payment>(
+            r#"
+            INSERT INTO payments (
+                order_id,
+                provider,
+                idempotency_key,
+                amount_kopecks,
+                currency,
+                status
+            )
+            VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                'created'
+            )
+            RETURNING
+                id,
+                order_id,
+                provider,
+                provider_payment_id,
+                idempotency_key,
+                amount_kopecks,
+                currency,
+                status,
+                payment_url,
+                created_at,
+                updated_at,
+                paid_at
+            "#,
+        )
+        .bind(new_payment.order_id)
+        .bind(&new_payment.provider)
+        .bind(&new_payment.idempotency_key)
+        .bind(new_payment.amount_kopecks)
+        .bind(&new_payment.currency)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(payment)
+    }
+
+    pub async fn get_payment(&self, payment_id: i64) -> Result<Option<Payment>, DatabaseError> {
+        let payment = sqlx::query_as::<_, Payment>(
+            r#"
+            SELECT
+                id,
+                order_id,
+                provider,
+                provider_payment_id,
+                idempotency_key,
+                amount_kopecks,
+                currency,
+                status,
+                payment_url,
+                created_at,
+                updated_at,
+                paid_at
+            FROM payments
+            WHERE id = $1
+            "#,
+        )
+        .bind(payment_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(payment)
+    }
+
+    pub async fn get_payment_by_idempotency_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<Payment>, DatabaseError> {
+        let payment = sqlx::query_as::<_, Payment>(
+            r#"
+            SELECT
+                id,
+                order_id,
+                provider,
+                provider_payment_id,
+                idempotency_key,
+                amount_kopecks,
+                currency,
+                status,
+                payment_url,
+                created_at,
+                updated_at,
+                paid_at
+            FROM payments
+            WHERE idempotency_key = $1
+            "#,
+        )
+        .bind(idempotency_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(payment)
+    }
+
+    pub async fn get_or_create_payment(
+        &self,
+        order: &Order,
+        provider: &str,
+    ) -> Result<Payment, DatabaseError> {
+        let idempotency_key = format!("order:{}:{provider}", order.id);
+
+        if let Some(payment) = self
+            .get_payment_by_idempotency_key(&idempotency_key)
+            .await?
+        {
+            return Ok(payment);
+        }
+
+        self.create_payment(NewPayment {
+            order_id: order.id,
+            provider: provider.to_owned(),
+            amount_kopecks: order.price_kopecks,
+            currency: order.currency.clone(),
+            idempotency_key,
+        })
+        .await
+    }
+
+    pub async fn mark_payment_paid(
+        &self,
+        payment_id: i64,
+    ) -> Result<MarkPaymentPaidResult, DatabaseError> {
+        let mut tx = self.pool.begin().await?;
+
+        let payment = sqlx::query_as::<_, Payment>(
+            r#"
+            SELECT
+                id,
+                order_id,
+                provider,
+                provider_payment_id,
+                idempotency_key,
+                amount_kopecks,
+                currency,
+                status,
+                payment_url,
+                created_at,
+                updated_at,
+                paid_at
+            FROM payments
+            WHERE id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(payment_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(payment) = payment else {
+            tx.rollback().await?;
+
+            return Ok(MarkPaymentPaidResult::NotFound);
+        };
+
+        if payment.status == "paid" {
+            tx.rollback().await?;
+
+            return Ok(MarkPaymentPaidResult::AlreadyPaid);
+        }
+
+        let order_status = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT status
+            FROM orders
+            WHERE id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(payment.order_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        if order_status != "pending" {
+            tx.rollback().await?;
+
+            return Ok(MarkPaymentPaidResult::OrderNotPayable);
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE payments
+            SET
+                status = 'paid',
+                paid_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(payment.id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE orders
+            SET
+                status = 'paid',
+                updated_at = NOW()
+            WHERE id = $1
+              AND status = 'pending'
+            "#,
+        )
+        .bind(payment.order_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(MarkPaymentPaidResult::Applied)
+    }
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -461,6 +688,40 @@ pub struct Order {
 
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct Payment {
+    pub id: i64,
+
+    pub order_id: i64,
+
+    pub provider: String,
+    pub provider_payment_id: Option<String>,
+    pub idempotency_key: String,
+
+    pub amount_kopecks: i64,
+    pub currency: String,
+
+    pub status: String,
+
+    pub payment_url: Option<String>,
+
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub paid_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewPayment {
+    pub order_id: i64,
+
+    pub provider: String,
+
+    pub amount_kopecks: i64,
+    pub currency: String,
+
+    pub idempotency_key: String,
 }
 
 #[derive(Debug, Error)]

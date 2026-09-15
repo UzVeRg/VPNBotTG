@@ -1,6 +1,7 @@
 mod bot;
 mod config;
 mod database;
+mod payment;
 mod remnawave;
 mod tariff;
 mod trial;
