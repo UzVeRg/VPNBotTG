@@ -29,9 +29,9 @@ pub struct ServiceConfig {
     pub phone: Option<String>,
     pub contact_address: Option<String>,
 
-    pub offer_url: Url,
+    pub docs_url: Url,
+    pub user_agreement_url: Url,
     pub privacy_url: Url,
-    pub refund_url: Url,
 }
 
 impl Config {
@@ -48,15 +48,27 @@ impl Config {
         }
 
         let service = ServiceConfig {
-            support_telegram_url: required_url("SERVICE_SUPPORT_TELEGRAM_URL")?,
-            support_email: required("SERVICE_SUPPORT_EMAIL")?,
-
+            support_telegram_url: required_url(
+                "SERVICE_SUPPORT_TELEGRAM_URL"
+            )?,
+            support_email: required(
+                "SERVICE_SUPPORT_EMAIL"
+            )?,
+        
             phone: optional("SERVICE_PHONE"),
-            contact_address: optional("SERVICE_CONTACT_ADDRESS"),
-
-            offer_url: required_url("SERVICE_OFFER_URL")?,
-            privacy_url: required_url("SERVICE_PRIVACY_URL")?,
-            refund_url: required_url("SERVICE_REFUND_URL")?,
+            contact_address: optional(
+                "SERVICE_CONTACT_ADDRESS"
+            ),
+        
+            docs_url: required_url(
+                "SERVICE_DOCS_URL"
+            )?,
+            user_agreement_url: required_url(
+                "SERVICE_USER_AGREEMENT_URL"
+            )?,
+            privacy_url: required_url(
+                "SERVICE_PRIVACY_URL"
+            )?,
         };
 
         Ok(Self {
