@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("VPNBotTG запущен");
 
-    bot::run(bot, remnawave, trial, database, tariffs).await;
+    bot::run(bot, remnawave, trial, database, tariffs, config.service).await;
 
     tracing::info!("VPNBotTG остановлен");
 

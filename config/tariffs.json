@@ -2,6 +2,7 @@
   {
     "code": "monthly_full",
     "name": "1 месяц — Полный",
+    "description": "Полный доступ ко всем доступным способам подключения сервиса.",
     "price_kopecks": 25000,
     "duration_days": 30,
     "traffic_gib": null,
@@ -15,6 +16,7 @@
   {
     "code": "monthly_no_hysteria",
     "name": "1 месяц — Без Hysteria2 (Полный)",
+    "description": "Доступ ко всем доступным способам подключения, кроме Hysteria2.",
     "price_kopecks": 20000,
     "duration_days": 30,
     "traffic_gib": null,

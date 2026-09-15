@@ -9,6 +9,7 @@ use teloxide::{
 };
 
 use crate::{
+    config::ServiceConfig,
     database::Database,
     remnawave::{RemnawaveClient, RemnawaveUser},
     tariff::TariffCatalog,
@@ -29,6 +30,7 @@ pub async fn run(
     trial: TrialService,
     database: Database,
     tariffs: TariffCatalog,
+    service: ServiceConfig,
 ) {
     configure_profile(&bot).await;
 
@@ -42,7 +44,7 @@ pub async fn run(
         .branch(Update::filter_message().endpoint(handle_other_message));
 
     Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![remnawave, trial, database, tariffs])
+        .dependencies(dptree::deps![remnawave, trial, database, tariffs, service])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
@@ -124,9 +126,8 @@ async fn handle_callback(
     trial: TrialService,
     database: Database,
     tariffs: TariffCatalog,
+    service: ServiceConfig,
 ) -> ResponseResult<()> {
-    // Telegram рекомендует отвечать на callback,
-    // чтобы убрать индикатор загрузки у кнопки.
     bot.answer_callback_query(query.id.clone()).await?;
 
     let Some(data) = query.data.as_deref() else {
@@ -144,7 +145,13 @@ async fn handle_callback(
     register_user(&database, query.from.id.0).await;
 
     if let Some(code) = data.strip_prefix(ui::CALLBACK_TARIFF_PREFIX) {
-        show_tariff(&bot, message, code, &tariffs).await?;
+        show_tariff(&bot, message, code, &tariffs, &service).await?;
+
+        return Ok(());
+    }
+
+    if let Some(code) = data.strip_prefix(ui::CALLBACK_CHECKOUT_PREFIX) {
+        show_checkout(&bot, message, code, &tariffs, &service).await?;
 
         return Ok(());
     }
@@ -165,7 +172,7 @@ async fn handle_callback(
         ui::CALLBACK_ABOUT => {
             let text = ui::about_text(trial.config());
 
-            edit_screen(&bot, message, &text, ui::back_keyboard()).await?;
+            edit_screen(&bot, message, &text, ui::about_keyboard()).await?;
         }
 
         ui::CALLBACK_TRIAL => {
@@ -174,6 +181,22 @@ async fn handle_callback(
 
         ui::CALLBACK_BUY => {
             show_tariffs(&bot, message, &tariffs).await?;
+        }
+
+        ui::CALLBACK_SUPPORT => {
+            let text = ui::support_text(&service);
+
+            edit_screen(&bot, message, &text, ui::support_keyboard(&service)).await?;
+        }
+
+        ui::CALLBACK_DOCUMENTS => {
+            edit_screen(
+                &bot,
+                message,
+                ui::documents_text(),
+                ui::documents_keyboard(&service),
+            )
+            .await?;
         }
 
         _ => {
@@ -214,6 +237,7 @@ async fn show_tariff(
     message: &Message,
     code: &str,
     tariffs: &TariffCatalog,
+    service: &ServiceConfig,
 ) -> ResponseResult<()> {
     let Some(tariff) = tariffs.get_active(code) else {
         edit_screen(
@@ -229,7 +253,31 @@ async fn show_tariff(
 
     let text = ui::tariff_text(tariff);
 
-    edit_screen(bot, message, &text, ui::tariff_keyboard()).await
+    edit_screen(bot, message, &text, ui::tariff_keyboard(tariff, service)).await
+}
+
+async fn show_checkout(
+    bot: &Bot,
+    message: &Message,
+    code: &str,
+    tariffs: &TariffCatalog,
+    service: &ServiceConfig,
+) -> ResponseResult<()> {
+    let Some(tariff) = tariffs.get_active(code) else {
+        edit_screen(
+            bot,
+            message,
+            "⚠️ Этот тариф больше недоступен.",
+            ui::tariffs_keyboard(tariffs),
+        )
+        .await?;
+
+        return Ok(());
+    };
+
+    let text = ui::checkout_text(tariff);
+
+    edit_screen(bot, message, &text, ui::checkout_keyboard(service)).await
 }
 
 async fn show_trial(
@@ -392,7 +440,7 @@ async fn show_subscription(
             let mut text = String::from("🔑 Ссылка подписки\n\n");
 
             for user in users {
-                text.push_str(&format!("{}\n{}\n\n", user.username, user.subscription_url,));
+                text.push_str(&format!("{}\n{}\n\n", user.username, user.subscription_url));
             }
 
             text.push_str(
@@ -479,23 +527,20 @@ fn format_status(users: &[RemnawaveUser]) -> String {
 
 fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
-
     const MB: f64 = KB * 1024.0;
-
     const GB: f64 = MB * 1024.0;
-
     const TB: f64 = GB * 1024.0;
 
     let bytes = bytes as f64;
 
     if bytes >= TB {
-        format!("{:.2} TB", bytes / TB,)
+        format!("{:.2} TB", bytes / TB)
     } else if bytes >= GB {
-        format!("{:.2} GB", bytes / GB,)
+        format!("{:.2} GB", bytes / GB)
     } else if bytes >= MB {
-        format!("{:.2} MB", bytes / MB,)
+        format!("{:.2} MB", bytes / MB)
     } else if bytes >= KB {
-        format!("{:.2} KB", bytes / KB,)
+        format!("{:.2} KB", bytes / KB)
     } else {
         format!("{bytes:.0} B")
     }

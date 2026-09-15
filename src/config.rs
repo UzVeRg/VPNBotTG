@@ -1,5 +1,6 @@
 use std::{env, str::FromStr};
 
+use reqwest::Url;
 use thiserror::Error;
 
 #[derive(Clone)]
@@ -9,6 +10,7 @@ pub struct Config {
     pub remnawave_token: String,
     pub database_url: String,
     pub trial: TrialConfig,
+    pub service: ServiceConfig,
 }
 
 #[derive(Clone)]
@@ -17,6 +19,19 @@ pub struct TrialConfig {
     pub traffic_gib: u64,
     pub hwid_limit: u32,
     pub internal_squad_name: String,
+}
+
+#[derive(Clone)]
+pub struct ServiceConfig {
+    pub support_telegram_url: Url,
+    pub support_email: String,
+
+    pub phone: Option<String>,
+    pub contact_address: Option<String>,
+
+    pub offer_url: Url,
+    pub privacy_url: Url,
+    pub refund_url: Url,
 }
 
 impl Config {
@@ -32,12 +47,25 @@ impl Config {
             return Err(ConfigError::InvalidTrialConfiguration);
         }
 
+        let service = ServiceConfig {
+            support_telegram_url: required_url("SERVICE_SUPPORT_TELEGRAM_URL")?,
+            support_email: required("SERVICE_SUPPORT_EMAIL")?,
+
+            phone: optional("SERVICE_PHONE"),
+            contact_address: optional("SERVICE_CONTACT_ADDRESS"),
+
+            offer_url: required_url("SERVICE_OFFER_URL")?,
+            privacy_url: required_url("SERVICE_PRIVACY_URL")?,
+            refund_url: required_url("SERVICE_REFUND_URL")?,
+        };
+
         Ok(Self {
             telegram_token: required("TELOXIDE_TOKEN")?,
             remnawave_url: required("REMNAWAVE_URL")?,
             remnawave_token: required("REMNAWAVE_TOKEN")?,
             database_url: required("DATABASE_URL")?,
             trial,
+            service,
         })
     }
 }
@@ -50,6 +78,19 @@ fn required(name: &'static str) -> Result<String, ConfigError> {
     }
 
     Ok(value)
+}
+
+fn required_url(name: &'static str) -> Result<Url, ConfigError> {
+    let value = required(name)?;
+
+    Url::parse(&value).map_err(|_| ConfigError::InvalidVariable(name))
+}
+
+fn optional(name: &'static str) -> Option<String> {
+    match env::var(name) {
+        Ok(value) if !value.trim().is_empty() => Some(value),
+        _ => None,
+    }
 }
 
 fn required_number<T>(name: &'static str) -> Result<T, ConfigError>

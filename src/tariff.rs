@@ -6,6 +6,7 @@ use thiserror::Error;
 pub struct Tariff {
     pub code: String,
     pub name: String,
+    pub description: String,
     pub price_kopecks: u64,
     pub duration_days: i64,
     pub traffic_gib: Option<u64>,
@@ -83,6 +84,13 @@ fn validate_tariffs(tariffs: &[Tariff]) -> Result<(), TariffError> {
         if tariff.name.trim().is_empty() {
             return Err(TariffError::Invalid(format!(
                 "у тарифа '{}' отсутствует название",
+                tariff.code
+            )));
+        }
+
+        if tariff.description.trim().is_empty() {
+            return Err(TariffError::Invalid(format!(
+                "у тарифа '{}' отсутствует описание",
                 tariff.code
             )));
         }
