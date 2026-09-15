@@ -48,27 +48,15 @@ impl Config {
         }
 
         let service = ServiceConfig {
-            support_telegram_url: required_url(
-                "SERVICE_SUPPORT_TELEGRAM_URL"
-            )?,
-            support_email: required(
-                "SERVICE_SUPPORT_EMAIL"
-            )?,
-        
+            support_telegram_url: required_url("SERVICE_SUPPORT_TELEGRAM_URL")?,
+            support_email: required("SERVICE_SUPPORT_EMAIL")?,
+
             phone: optional("SERVICE_PHONE"),
-            contact_address: optional(
-                "SERVICE_CONTACT_ADDRESS"
-            ),
-        
-            docs_url: required_url(
-                "SERVICE_DOCS_URL"
-            )?,
-            user_agreement_url: required_url(
-                "SERVICE_USER_AGREEMENT_URL"
-            )?,
-            privacy_url: required_url(
-                "SERVICE_PRIVACY_URL"
-            )?,
+            contact_address: optional("SERVICE_CONTACT_ADDRESS"),
+
+            docs_url: required_url("SERVICE_DOCS_URL")?,
+            user_agreement_url: required_url("SERVICE_USER_AGREEMENT_URL")?,
+            privacy_url: required_url("SERVICE_PRIVACY_URL")?,
         };
 
         Ok(Self {

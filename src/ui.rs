@@ -1,5 +1,6 @@
 use crate::{
     config::{ServiceConfig, TrialConfig},
+    database::Order,
     tariff::{Tariff, TariffCatalog},
 };
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
@@ -104,37 +105,21 @@ pub fn tariff_text(tariff: &Tariff) -> String {
     )
 }
 
-pub fn tariff_keyboard(
-    tariff: &Tariff,
-    service: &ServiceConfig,
-) -> InlineKeyboardMarkup {
+pub fn tariff_keyboard(tariff: &Tariff, service: &ServiceConfig) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new([
         vec![InlineKeyboardButton::callback(
             "Продолжить оформление",
-            format!(
-                "{}{}",
-                CALLBACK_CHECKOUT_PREFIX,
-                tariff.code
-            ),
+            format!("{}{}", CALLBACK_CHECKOUT_PREFIX, tariff.code),
         )],
         vec![
-            InlineKeyboardButton::url(
-                "📜 Соглашение",
-                service.user_agreement_url.clone(),
-            ),
-            InlineKeyboardButton::url(
-                "🔐 Конфиденциальность",
-                service.privacy_url.clone(),
-            ),
+            InlineKeyboardButton::url("📜 Соглашение", service.user_agreement_url.clone()),
+            InlineKeyboardButton::url("🔐 Конфиденциальность", service.privacy_url.clone()),
         ],
         vec![InlineKeyboardButton::url(
             "📚 Все документы",
             service.docs_url.clone(),
         )],
-        vec![InlineKeyboardButton::callback(
-            "⬅️ К тарифам",
-            CALLBACK_BUY,
-        )],
+        vec![InlineKeyboardButton::callback("⬅️ К тарифам", CALLBACK_BUY)],
         vec![InlineKeyboardButton::callback(
             "🏠 Главное меню",
             CALLBACK_HOME,
@@ -152,36 +137,24 @@ pub fn checkout_text(tariff: &Tariff) -> String {
          что ознакомился с пользовательским соглашением \
          и политикой конфиденциальности.\n\n\
          Условия возврата указаны в пользовательском соглашении.\n\n\
-         Платёжный модуль будет подключён после одобрения \
-         проекта платёжным провайдером.",
+         Создание платёжного счёта пока недоступно.",
         tariff.name,
         tariff.price_rubles(),
         tariff.duration_days,
     )
 }
 
-pub fn checkout_keyboard(
-    service: &ServiceConfig,
-) -> InlineKeyboardMarkup {
+pub fn checkout_keyboard(service: &ServiceConfig) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new([
         vec![
-            InlineKeyboardButton::url(
-                "📜 Соглашение",
-                service.user_agreement_url.clone(),
-            ),
-            InlineKeyboardButton::url(
-                "🔐 Конфиденциальность",
-                service.privacy_url.clone(),
-            ),
+            InlineKeyboardButton::url("📜 Соглашение", service.user_agreement_url.clone()),
+            InlineKeyboardButton::url("🔐 Конфиденциальность", service.privacy_url.clone()),
         ],
         vec![InlineKeyboardButton::url(
             "📚 Все документы",
             service.docs_url.clone(),
         )],
-        vec![InlineKeyboardButton::callback(
-            "⬅️ К тарифам",
-            CALLBACK_BUY,
-        )],
+        vec![InlineKeyboardButton::callback("⬅️ К тарифам", CALLBACK_BUY)],
         vec![InlineKeyboardButton::callback(
             "🏠 Главное меню",
             CALLBACK_HOME,
@@ -277,9 +250,7 @@ pub fn documents_text() -> &'static str {
      Условия возврата включены в пользовательское соглашение."
 }
 
-pub fn documents_keyboard(
-    service: &ServiceConfig,
-) -> InlineKeyboardMarkup {
+pub fn documents_keyboard(service: &ServiceConfig) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new([
         vec![InlineKeyboardButton::url(
             "📚 SilentOkVPN Docs",
@@ -293,8 +264,35 @@ pub fn documents_keyboard(
             "🔐 Политика конфиденциальности",
             service.privacy_url.clone(),
         )],
+        vec![InlineKeyboardButton::callback("⬅️ Назад", CALLBACK_HOME)],
+    ])
+}
+
+pub fn order_text(order: &Order) -> String {
+    format!(
+        "🧾 Заказ #{}\n\n\
+         Тариф: {}\n\
+         Сумма: {} ₽\n\
+         Срок доступа: {} дней\n\
+         Статус: ожидает оплаты\n\n\
+         Заказ создан и сохранён.\n\
+         Оплата для него пока недоступна.",
+        order.id,
+        order.tariff_name,
+        order.price_kopecks / 100,
+        order.duration_days,
+    )
+}
+
+pub fn order_keyboard(service: &ServiceConfig) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new([
+        vec![
+            InlineKeyboardButton::url("📜 Соглашение", service.user_agreement_url.clone()),
+            InlineKeyboardButton::url("🔐 Конфиденциальность", service.privacy_url.clone()),
+        ],
+        vec![InlineKeyboardButton::callback("⬅️ К тарифам", CALLBACK_BUY)],
         vec![InlineKeyboardButton::callback(
-            "⬅️ Назад",
+            "🏠 Главное меню",
             CALLBACK_HOME,
         )],
     ])
@@ -305,8 +303,7 @@ pub fn about_text(trial: &TrialConfig) -> String {
         "ℹ️ О сервисе\n\n\
          SilentOkVPN предоставляет VPN-доступ для защищённого сетевого соединения.\n\n\
          В боте можно приобрести подписку, проверить её состояние, \
-         посмотреть использование трафика и получить ссылку для подключения.\n\n\n\n\n 
-         mekbuda\n\n\n\n\
+         посмотреть использование трафика и получить ссылку для подключения.\n\n\
          🎁 Пробная подписка:\n\
          📅 Срок: {} дн.\n\
          📊 Трафик: {} GiB\n\

@@ -246,6 +246,170 @@ impl Database {
 
         Ok(())
     }
+
+    pub async fn create_order(&self, new_order: NewOrder) -> Result<Order, DatabaseError> {
+        let telegram_id =
+            i64::try_from(new_order.telegram_id).map_err(|_| DatabaseError::InvalidTelegramId)?;
+
+        let price_kopecks =
+            i64::try_from(new_order.price_kopecks).map_err(|_| DatabaseError::InvalidOrderValue)?;
+
+        let duration_days =
+            i32::try_from(new_order.duration_days).map_err(|_| DatabaseError::InvalidOrderValue)?;
+
+        let traffic_gib = new_order
+            .traffic_gib
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| DatabaseError::InvalidOrderValue)?;
+
+        let hwid_limit =
+            i32::try_from(new_order.hwid_limit).map_err(|_| DatabaseError::InvalidOrderValue)?;
+
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            r#"
+            UPDATE orders
+            SET
+                status = 'cancelled',
+                updated_at = NOW()
+            WHERE telegram_id = $1
+              AND status = 'pending'
+            "#,
+        )
+        .bind(telegram_id)
+        .execute(&mut *tx)
+        .await?;
+
+        let order = sqlx::query_as::<_, Order>(
+            r#"
+            INSERT INTO orders (
+                telegram_id,
+                tariff_code,
+                tariff_name,
+                tariff_description,
+                price_kopecks,
+                currency,
+                duration_days,
+                traffic_gib,
+                hwid_limit,
+                internal_squad_names,
+                status
+            )
+            VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                'RUB',
+                $6,
+                $7,
+                $8,
+                $9,
+                'pending'
+            )
+            RETURNING
+                id,
+                telegram_id,
+                tariff_code,
+                tariff_name,
+                tariff_description,
+                price_kopecks,
+                currency,
+                duration_days,
+                traffic_gib,
+                hwid_limit,
+                internal_squad_names,
+                status,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(telegram_id)
+        .bind(&new_order.tariff_code)
+        .bind(&new_order.tariff_name)
+        .bind(&new_order.tariff_description)
+        .bind(price_kopecks)
+        .bind(duration_days)
+        .bind(traffic_gib)
+        .bind(hwid_limit)
+        .bind(&new_order.internal_squad_names)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(order)
+    }
+
+    pub async fn get_order(&self, order_id: i64) -> Result<Option<Order>, DatabaseError> {
+        let order = sqlx::query_as::<_, Order>(
+            r#"
+            SELECT
+                id,
+                telegram_id,
+                tariff_code,
+                tariff_name,
+                tariff_description,
+                price_kopecks,
+                currency,
+                duration_days,
+                traffic_gib,
+                hwid_limit,
+                internal_squad_names,
+                status,
+                created_at,
+                updated_at
+            FROM orders
+            WHERE id = $1
+            "#,
+        )
+        .bind(order_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(order)
+    }
+
+    pub async fn get_user_pending_order(
+        &self,
+        telegram_id: u64,
+    ) -> Result<Option<Order>, DatabaseError> {
+        let telegram_id =
+            i64::try_from(telegram_id).map_err(|_| DatabaseError::InvalidTelegramId)?;
+
+        let order = sqlx::query_as::<_, Order>(
+            r#"
+            SELECT
+                id,
+                telegram_id,
+                tariff_code,
+                tariff_name,
+                tariff_description,
+                price_kopecks,
+                currency,
+                duration_days,
+                traffic_gib,
+                hwid_limit,
+                internal_squad_names,
+                status,
+                created_at,
+                updated_at
+            FROM orders
+            WHERE telegram_id = $1
+              AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(telegram_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(order)
+    }
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -255,6 +419,47 @@ pub struct UserProfile {
     pub registered_at: DateTime<Utc>,
     pub current_tariff_code: Option<String>,
     pub status: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewOrder {
+    pub telegram_id: u64,
+
+    pub tariff_code: String,
+    pub tariff_name: String,
+    pub tariff_description: String,
+
+    pub price_kopecks: u64,
+    pub duration_days: i64,
+    pub traffic_gib: Option<u64>,
+    pub hwid_limit: u32,
+
+    pub internal_squad_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct Order {
+    pub id: i64,
+
+    pub telegram_id: i64,
+
+    pub tariff_code: String,
+    pub tariff_name: String,
+    pub tariff_description: String,
+
+    pub price_kopecks: i64,
+    pub currency: String,
+
+    pub duration_days: i32,
+    pub traffic_gib: Option<i64>,
+    pub hwid_limit: i32,
+
+    pub internal_squad_names: Vec<String>,
+
+    pub status: String,
+
+    pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -271,4 +476,7 @@ pub enum DatabaseError {
 
     #[error("Telegram ID не помещается в BIGINT")]
     InvalidTelegramId,
+
+    #[error("значение заказа не помещается в тип PostgreSQL")]
+    InvalidOrderValue,
 }

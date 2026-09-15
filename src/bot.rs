@@ -10,9 +10,9 @@ use teloxide::{
 
 use crate::{
     config::ServiceConfig,
-    database::Database,
+    database::{Database, NewOrder},
     remnawave::{RemnawaveClient, RemnawaveUser},
-    tariff::TariffCatalog,
+    tariff::{Tariff, TariffCatalog},
     trial::{TrialIssueResult, TrialService},
     ui,
 };
@@ -151,7 +151,16 @@ async fn handle_callback(
     }
 
     if let Some(code) = data.strip_prefix(ui::CALLBACK_CHECKOUT_PREFIX) {
-        show_checkout(&bot, message, code, &tariffs, &service).await?;
+        show_checkout(
+            &bot,
+            message,
+            query.from.id.0,
+            code,
+            &tariffs,
+            &database,
+            &service,
+        )
+        .await?;
 
         return Ok(());
     }
@@ -259,8 +268,10 @@ async fn show_tariff(
 async fn show_checkout(
     bot: &Bot,
     message: &Message,
+    telegram_id: u64,
     code: &str,
     tariffs: &TariffCatalog,
+    database: &Database,
     service: &ServiceConfig,
 ) -> ResponseResult<()> {
     let Some(tariff) = tariffs.get_active(code) else {
@@ -274,6 +285,82 @@ async fn show_checkout(
 
         return Ok(());
     };
+
+    fn order_matches_tariff(order: &crate::database::Order, tariff: &Tariff) -> bool {
+        let order_traffic = match order.traffic_gib {
+            Some(value) => u64::try_from(value).ok(),
+            None => None,
+        };
+
+        order.tariff_code == tariff.code
+            && u64::try_from(order.price_kopecks).ok() == Some(tariff.price_kopecks)
+            && i64::from(order.duration_days) == tariff.duration_days
+            && order_traffic == tariff.traffic_gib
+            && u32::try_from(order.hwid_limit).ok() == Some(tariff.hwid_limit)
+            && order.internal_squad_names == tariff.internal_squad_names
+    }
+
+    match database.get_user_pending_order(telegram_id).await {
+        Ok(Some(order)) if order_matches_tariff(&order, tariff) => {
+            let text = ui::order_text(&order);
+
+            edit_screen(bot, message, &text, ui::order_keyboard(service)).await?;
+
+            return Ok(());
+        }
+
+        Ok(_) => {}
+
+        Err(error) => {
+            tracing::error!(
+                telegram_id,
+                error = %error,
+                "Не удалось проверить существующий pending-заказ"
+            );
+        }
+    }
+
+    match database
+        .create_order(NewOrder {
+            telegram_id,
+
+            tariff_code: tariff.code.clone(),
+            tariff_name: tariff.name.clone(),
+            tariff_description: tariff.description.clone(),
+
+            price_kopecks: tariff.price_kopecks,
+            duration_days: tariff.duration_days,
+            traffic_gib: tariff.traffic_gib,
+            hwid_limit: tariff.hwid_limit,
+
+            internal_squad_names: tariff.internal_squad_names.clone(),
+        })
+        .await
+    {
+        Ok(order) => {
+            let text = ui::order_text(&order);
+
+            edit_screen(bot, message, &text, ui::order_keyboard(service)).await?;
+        }
+
+        Err(error) => {
+            tracing::error!(
+                telegram_id,
+                tariff_code = tariff.code,
+                error = %error,
+                "Не удалось создать заказ"
+            );
+
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Не удалось создать заказ.\n\n\
+                 Попробуйте ещё раз немного позже.",
+                ui::tariffs_keyboard(tariffs),
+            )
+            .await?;
+        }
+    }
 
     let text = ui::checkout_text(tariff);
 
