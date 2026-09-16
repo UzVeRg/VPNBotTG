@@ -1,3 +1,4 @@
+mod activation;
 mod bot;
 mod config;
 mod database;

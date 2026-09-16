@@ -51,6 +51,34 @@ impl RemnawaveClient {
         Ok(response.response.users)
     }
 
+    pub async fn get_user_by_id(
+        &self,
+        user_id: i64,
+    ) -> Result<Option<RemnawaveUser>, RemnawaveError> {
+        let url = format!("{}/api/users/{}", self.base_url, user_id);
+
+        let response = self.http.get(url).bearer_auth(&self.token).send().await?;
+
+        let status = response.status();
+
+        if status == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        if !status.is_success() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("<response body unavailable>"));
+
+            return Err(RemnawaveError::Api { status, body });
+        }
+
+        let response = response.json::<UserResponse>().await?;
+
+        Ok(Some(response.response))
+    }
+
     pub async fn create_user(
         &self,
         request: &CreateUserRequest,
@@ -60,6 +88,36 @@ impl RemnawaveClient {
         let response = self
             .http
             .post(url)
+            .bearer_auth(&self.token)
+            .json(request)
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("<response body unavailable>"));
+
+            return Err(RemnawaveError::Api { status, body });
+        }
+
+        let response = response.json::<UserResponse>().await?;
+
+        Ok(response.response)
+    }
+
+    pub async fn update_user(
+        &self,
+        request: &UpdateUserRequest,
+    ) -> Result<RemnawaveUser, RemnawaveError> {
+        let url = format!("{}/api/users", self.base_url);
+
+        let response = self
+            .http
+            .patch(url)
             .bearer_auth(&self.token)
             .json(request)
             .send()
@@ -122,6 +180,30 @@ pub struct CreateUserRequest {
     pub tag: String,
     pub telegram_id: u64,
     pub hwid_device_limit: u32,
+    pub active_internal_squads: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateUserRequest {
+    pub id: i64,
+
+    pub status: String,
+
+    pub traffic_limit_bytes: u64,
+
+    pub traffic_limit_strategy: String,
+
+    pub expire_at: String,
+
+    pub description: String,
+
+    pub tag: String,
+
+    pub telegram_id: u64,
+
+    pub hwid_device_limit: u32,
+
     pub active_internal_squads: Vec<String>,
 }
 

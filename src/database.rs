@@ -637,6 +637,165 @@ impl Database {
 
         Ok(MarkPaymentPaidResult::Applied)
     }
+
+    pub async fn get_or_create_activation(
+        &self,
+        order_id: i64,
+    ) -> Result<Activation, DatabaseError> {
+        let activation = sqlx::query_as::<_, Activation>(
+            r#"
+            INSERT INTO activations (
+                order_id
+            )
+            VALUES ($1)
+            ON CONFLICT (order_id)
+            DO UPDATE SET
+                order_id = EXCLUDED.order_id
+            RETURNING
+                id,
+                order_id,
+                status,
+                operation,
+                remnawave_user_id,
+                target_expire_at,
+                target_traffic_limit_bytes,
+                target_hwid_limit,
+                target_internal_squad_uuids,
+                last_error,
+                created_at,
+                started_at,
+                completed_at,
+                updated_at
+            "#,
+        )
+        .bind(order_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(activation)
+    }
+
+    pub async fn set_activation_plan(
+        &self,
+        activation_id: i64,
+        operation: &str,
+        remnawave_user_id: Option<i64>,
+        target_expire_at: DateTime<Utc>,
+        target_traffic_limit_bytes: i64,
+        target_hwid_limit: i32,
+        target_internal_squad_uuids: &[String],
+    ) -> Result<Activation, DatabaseError> {
+        let activation = sqlx::query_as::<_, Activation>(
+            r#"
+            UPDATE activations
+            SET
+                operation = $2,
+                remnawave_user_id = $3,
+                target_expire_at = $4,
+                target_traffic_limit_bytes = $5,
+                target_hwid_limit = $6,
+                target_internal_squad_uuids = $7,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING
+                id,
+                order_id,
+                status,
+                operation,
+                remnawave_user_id,
+                target_expire_at,
+                target_traffic_limit_bytes,
+                target_hwid_limit,
+                target_internal_squad_uuids,
+                last_error,
+                created_at,
+                started_at,
+                completed_at,
+                updated_at
+            "#,
+        )
+        .bind(activation_id)
+        .bind(operation)
+        .bind(remnawave_user_id)
+        .bind(target_expire_at)
+        .bind(target_traffic_limit_bytes)
+        .bind(target_hwid_limit)
+        .bind(target_internal_squad_uuids)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(activation)
+    }
+
+    pub async fn mark_activation_processing(
+        &self,
+        activation_id: i64,
+    ) -> Result<(), DatabaseError> {
+        sqlx::query(
+            r#"
+            UPDATE activations
+            SET
+                status = 'processing',
+                started_at = COALESCE(started_at, NOW()),
+                last_error = NULL,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(activation_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn mark_activation_succeeded(
+        &self,
+        activation_id: i64,
+        remnawave_user_id: i64,
+    ) -> Result<(), DatabaseError> {
+        sqlx::query(
+            r#"
+            UPDATE activations
+            SET
+                status = 'succeeded',
+                remnawave_user_id = $2,
+                completed_at = NOW(),
+                last_error = NULL,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(activation_id)
+        .bind(remnawave_user_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn mark_activation_failed(
+        &self,
+        activation_id: i64,
+        error: &str,
+    ) -> Result<(), DatabaseError> {
+        sqlx::query(
+            r#"
+            UPDATE activations
+            SET
+                status = 'failed',
+                last_error = $2,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(activation_id)
+        .bind(error)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -722,6 +881,34 @@ pub struct NewPayment {
     pub currency: String,
 
     pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct Activation {
+    pub id: i64,
+
+    pub order_id: i64,
+
+    pub status: String,
+
+    pub operation: Option<String>,
+
+    pub remnawave_user_id: Option<i64>,
+
+    pub target_expire_at: Option<DateTime<Utc>>,
+
+    pub target_traffic_limit_bytes: Option<i64>,
+
+    pub target_hwid_limit: Option<i32>,
+
+    pub target_internal_squad_uuids: Option<Vec<String>>,
+
+    pub last_error: Option<String>,
+
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Error)]
