@@ -285,8 +285,23 @@ pub fn order_text(order: &Order) -> String {
     )
 }
 
-pub fn order_keyboard(service: &ServiceConfig) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new([
+pub fn order_keyboard(
+    service: &ServiceConfig,
+    order_id: i64,
+    test_enabled: bool,
+) -> InlineKeyboardMarkup {
+    let mut rows = vec![];
+    if test_enabled {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "🧪 Тест: отметить оплату",
+            format!("test_paid:{order_id}"),
+        )]);
+        rows.push(vec![InlineKeyboardButton::callback(
+            "⚡ Тест: активировать",
+            format!("test_activate:{order_id}"),
+        )]);
+    }
+    rows.extend([
         vec![
             InlineKeyboardButton::url("📜 Соглашение", service.user_agreement_url.clone()),
             InlineKeyboardButton::url("🔐 Конфиденциальность", service.privacy_url.clone()),
@@ -296,7 +311,8 @@ pub fn order_keyboard(service: &ServiceConfig) -> InlineKeyboardMarkup {
             "🏠 Главное меню",
             CALLBACK_HOME,
         )],
-    ])
+    ]);
+    InlineKeyboardMarkup::new(rows)
 }
 
 pub fn about_text(trial: &TrialConfig) -> String {
