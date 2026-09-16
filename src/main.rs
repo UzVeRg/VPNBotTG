@@ -2,6 +2,7 @@ mod activation;
 mod bot;
 mod config;
 mod database;
+mod device;
 mod payment;
 mod remnawave;
 mod tariff;

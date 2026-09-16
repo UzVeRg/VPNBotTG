@@ -2,6 +2,9 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 #[derive(Clone)]
 pub struct RemnawaveClient {
     http: Client,
@@ -166,6 +169,47 @@ impl RemnawaveClient {
             .into_iter()
             .find(|squad| squad.name == name))
     }
+
+    pub async fn get_user_devices(&self, user_id: i64) -> Result<HwidDevices, RemnawaveError> {
+        let response = self
+            .http
+            .get(format!("{}/api/hwid/devices/{user_id}", self.base_url))
+            .bearer_auth(&self.token)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await?;
+
+        parse_devices_response(response).await
+    }
+
+    pub async fn delete_user_device(
+        &self,
+        user_id: i64,
+        hwid: &str,
+    ) -> Result<HwidDevices, RemnawaveError> {
+        let response = self
+            .http
+            .post(format!("{}/api/hwid/devices/delete", self.base_url))
+            .bearer_auth(&self.token)
+            .timeout(std::time::Duration::from_secs(15))
+            .json(&DeleteHwidDeviceRequest { user_id, hwid })
+            .send()
+            .await?;
+
+        parse_devices_response(response).await
+    }
+}
+
+async fn parse_devices_response(
+    response: reqwest::Response,
+) -> Result<HwidDevices, RemnawaveError> {
+    let status = response.status();
+
+    if !status.is_success() {
+        return Err(RemnawaveError::DeviceApi { status });
+    }
+
+    Ok(response.json::<HwidDevicesResponse>().await?.response)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -216,6 +260,7 @@ pub struct RemnawaveUser {
     pub traffic_limit_bytes: u64,
     pub expire_at: String,
     pub telegram_id: Option<u64>,
+    pub hwid_device_limit: Option<u32>,
     pub subscription_url: String,
     pub tag: Option<String>,
     pub user_traffic: UserTraffic,
@@ -262,8 +307,40 @@ struct InternalSquadsData {
     internal_squads: Vec<InternalSquad>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HwidDevice {
+    pub hwid: String,
+    pub user_id: i64,
+    pub platform: Option<String>,
+    pub os_version: Option<String>,
+    pub device_model: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HwidDevices {
+    pub total: usize,
+    pub devices: Vec<HwidDevice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HwidDevicesResponse {
+    response: HwidDevices,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteHwidDeviceRequest<'a> {
+    user_id: i64,
+    hwid: &'a str,
+}
+
 #[derive(Debug, Error)]
 pub enum RemnawaveError {
+    #[error("Remnawave HWID API вернул HTTP {status}")]
+    DeviceApi { status: StatusCode },
+
     #[error("ошибка HTTP-запроса: {0}")]
     Http(#[from] reqwest::Error),
 

@@ -11,6 +11,7 @@ use teloxide::{
 use crate::{
     config::ServiceConfig,
     database::{Database, NewOrder},
+    device::{DeviceError, DeviceService},
     payment::PROVIDER_PLATEGA,
     remnawave::{RemnawaveClient, RemnawaveUser},
     tariff::{Tariff, TariffCatalog},
@@ -145,6 +146,25 @@ async fn handle_callback(
 
     register_user(&database, query.from.id.0).await;
 
+    if data == ui::CALLBACK_DEVICES
+        || data.starts_with(ui::CALLBACK_DEVICES_PAGE_PREFIX)
+        || data.starts_with(ui::CALLBACK_DEVICE_PREFIX)
+        || data.starts_with(ui::CALLBACK_DEVICE_DELETE_PREFIX)
+    {
+        if u64::try_from(message.chat.id.0).ok() != Some(query.from.id.0) {
+            return Ok(());
+        }
+
+        return handle_devices(
+            &bot,
+            message,
+            query.from.id.0,
+            data,
+            &DeviceService::new(remnawave.clone()),
+        )
+        .await;
+    }
+
     if let Some(code) = data.strip_prefix(ui::CALLBACK_TARIFF_PREFIX) {
         show_tariff(&bot, message, code, &tariffs, &service).await?;
 
@@ -215,6 +235,67 @@ async fn handle_callback(
     }
 
     Ok(())
+}
+
+async fn handle_devices(
+    bot: &Bot,
+    message: &Message,
+    telegram_id: u64,
+    data: &str,
+    devices: &DeviceService,
+) -> ResponseResult<()> {
+    let screen = if let Some(token) = data.strip_prefix(ui::CALLBACK_DEVICE_DELETE_PREFIX) {
+        devices.delete(telegram_id, token).await.map(|list| {
+            let (text, keyboard) = ui::devices_screen(&list, 0);
+            (format!("✅ Устройство удалено.\n\n{text}"), keyboard)
+        })
+    } else if let Some(token) = data.strip_prefix(ui::CALLBACK_DEVICE_PREFIX) {
+        devices
+            .get(telegram_id, token)
+            .await
+            .map(|device| ui::device_confirmation_screen(&device))
+    } else {
+        let page = data
+            .strip_prefix(ui::CALLBACK_DEVICES_PAGE_PREFIX)
+            .and_then(|page| page.parse::<usize>().ok())
+            .unwrap_or(0);
+        devices
+            .list(telegram_id)
+            .await
+            .map(|list| ui::devices_screen(&list, page))
+    };
+
+    let (text, keyboard) = match screen {
+        Ok(screen) => screen,
+        Err(error) => {
+            let text = match &error {
+                DeviceError::SubscriptionNotFound => {
+                    "📱 Подписка не найдена. Оформите подписку или начните пробный период."
+                }
+                DeviceError::MultipleSubscriptions | DeviceError::OwnershipMismatch => {
+                    "⚠️ Не удалось однозначно определить вашу подписку. Обратитесь в поддержку."
+                }
+                DeviceError::DeviceNotFound => {
+                    "📱 Устройство уже удалено или кнопка устарела. Откройте список устройств заново."
+                }
+                _ => {
+                    "⚠️ Не удалось обновить устройства. Обновите список и проверьте результат перед повторной попыткой."
+                }
+            };
+            if matches!(
+                error,
+                DeviceError::Remnawave(_)
+                    | DeviceError::OwnershipMismatch
+                    | DeviceError::IncompleteDeviceList
+                    | DeviceError::DeletionNotApplied
+            ) {
+                tracing::warn!(telegram_id, "Не удалось выполнить операцию с устройствами");
+            }
+            (text.to_owned(), ui::devices_back_keyboard())
+        }
+    };
+
+    edit_screen(bot, message, &text, keyboard).await
 }
 
 async fn register_message_user(database: &Database, message: &Message) {

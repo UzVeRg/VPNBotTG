@@ -1,9 +1,14 @@
 use crate::{
     config::{ServiceConfig, TrialConfig},
     database::Order,
+    device::{DeviceList, device_token},
+    remnawave::HwidDevice,
     tariff::{Tariff, TariffCatalog},
 };
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+
+#[cfg(test)]
+mod tests;
 
 pub const CALLBACK_HOME: &str = "home";
 pub const CALLBACK_STATUS: &str = "status";
@@ -16,6 +21,12 @@ pub const CALLBACK_DOCUMENTS: &str = "documents";
 pub const CALLBACK_TARIFF_PREFIX: &str = "tariff:";
 pub const CALLBACK_CHECKOUT_PREFIX: &str = "checkout:";
 pub const CALLBACK_PAYMENT_PREFIX: &str = "payment:";
+pub const CALLBACK_DEVICES: &str = "devices";
+pub const CALLBACK_DEVICES_PAGE_PREFIX: &str = "devices_page:";
+pub const CALLBACK_DEVICE_PREFIX: &str = "device:";
+pub const CALLBACK_DEVICE_DELETE_PREFIX: &str = "device_delete:";
+
+const DEVICES_PAGE_SIZE: usize = 5;
 
 pub fn home_text() -> &'static str {
     "🛡 SilentOkVPN\n\n\
@@ -28,6 +39,10 @@ pub fn home_keyboard() -> InlineKeyboardMarkup {
         vec![InlineKeyboardButton::callback(
             "📋 Моя подписка",
             CALLBACK_STATUS,
+        )],
+        vec![InlineKeyboardButton::callback(
+            "📱 Устройства",
+            CALLBACK_DEVICES,
         )],
         vec![InlineKeyboardButton::callback(
             "💳 Купить подписку",
@@ -187,8 +202,150 @@ pub fn status_keyboard() -> InlineKeyboardMarkup {
             "🔑 Получить ссылку",
             CALLBACK_SUBSCRIPTION,
         )],
+        vec![InlineKeyboardButton::callback(
+            "📱 Устройства",
+            CALLBACK_DEVICES,
+        )],
         vec![InlineKeyboardButton::callback("⬅️ Назад", CALLBACK_HOME)],
     ])
+}
+
+pub fn devices_screen(list: &DeviceList, page: usize) -> (String, InlineKeyboardMarkup) {
+    let pages = list.devices.len().div_ceil(DEVICES_PAGE_SIZE).max(1);
+    let page = page.min(pages - 1);
+    let start = page * DEVICES_PAGE_SIZE;
+    let limit = match list.limit {
+        Some(0) => String::from("Без лимита"),
+        Some(limit) => limit.to_string(),
+        None => String::from("По настройкам сервиса"),
+    };
+    let mut text = format!(
+        "📱 Устройства\n\nПодключено: {}\nЛимит: {limit}\n",
+        list.devices.len(),
+    );
+    let mut rows = Vec::new();
+
+    if list.devices.is_empty() {
+        text.push_str("\nУстройств пока нет. Добавьте ссылку подписки в приложение и обновите её.");
+    } else {
+        text.push_str("\nВыберите устройство, чтобы освободить его место:\n");
+        for (index, device) in list
+            .devices
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(DEVICES_PAGE_SIZE)
+        {
+            let number = index + 1;
+            let name = device_name(device);
+            text.push_str(&format!(
+                "\n{number}. {name}\nДобавлено: {}\n",
+                device_added_at(device),
+            ));
+            rows.push(vec![InlineKeyboardButton::callback(
+                format!("{number}. {name}"),
+                format!("{CALLBACK_DEVICE_PREFIX}{}", device_token(device)),
+            )]);
+        }
+        if pages > 1 {
+            text.push_str(&format!("\nСтраница {} из {pages}", page + 1));
+        }
+    }
+
+    let mut navigation = Vec::new();
+    if page > 0 {
+        navigation.push(InlineKeyboardButton::callback(
+            "⬅️",
+            format!("{CALLBACK_DEVICES_PAGE_PREFIX}{}", page - 1),
+        ));
+    }
+    if page + 1 < pages {
+        navigation.push(InlineKeyboardButton::callback(
+            "➡️",
+            format!("{CALLBACK_DEVICES_PAGE_PREFIX}{}", page + 1),
+        ));
+    }
+    if !navigation.is_empty() {
+        rows.push(navigation);
+    }
+    rows.push(vec![InlineKeyboardButton::callback(
+        "🔄 Обновить",
+        format!("{CALLBACK_DEVICES_PAGE_PREFIX}{page}"),
+    )]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        "⬅️ К подписке",
+        CALLBACK_STATUS,
+    )]);
+
+    (text, InlineKeyboardMarkup::new(rows))
+}
+
+pub fn device_confirmation_screen(device: &HwidDevice) -> (String, InlineKeyboardMarkup) {
+    let name = device_name(device);
+    let platform = device.platform.as_deref().unwrap_or("Не указана");
+    let os_version = device.os_version.as_deref().unwrap_or("Не указана");
+    let text = format!(
+        "📱 {name}\n\nСистема: {}\nВерсия: {}\nДобавлено: {}\n\n\
+         Удалить устройство и освободить место?\n\n\
+         Это не отзывает ссылку подписки. При её обновлении в приложении \
+         устройство может снова занять место.",
+        device_label(platform, 40),
+        device_label(os_version, 40),
+        device_added_at(device),
+    );
+    let keyboard = InlineKeyboardMarkup::new([
+        vec![InlineKeyboardButton::callback(
+            "🗑 Удалить устройство",
+            format!("{CALLBACK_DEVICE_DELETE_PREFIX}{}", device_token(device)),
+        )],
+        vec![InlineKeyboardButton::callback("Отмена", CALLBACK_DEVICES)],
+    ]);
+
+    (text, keyboard)
+}
+
+pub fn devices_back_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new([
+        vec![InlineKeyboardButton::callback(
+            "📱 К устройствам",
+            CALLBACK_DEVICES,
+        )],
+        vec![InlineKeyboardButton::callback(
+            "🏠 Главное меню",
+            CALLBACK_HOME,
+        )],
+    ])
+}
+
+fn device_name(device: &HwidDevice) -> String {
+    let name = device
+        .device_model
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or(device
+            .platform
+            .as_deref()
+            .filter(|value| !value.trim().is_empty()))
+        .unwrap_or("Устройство");
+    device_label(name, 40)
+}
+
+fn device_label(value: &str, max_chars: usize) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(max_chars)
+        .collect()
+}
+
+fn device_added_at(device: &HwidDevice) -> String {
+    chrono::DateTime::parse_from_rfc3339(&device.created_at)
+        .map(|date| {
+            date.with_timezone(&chrono::Utc)
+                .format("%d.%m.%Y %H:%M UTC")
+                .to_string()
+        })
+        .unwrap_or_else(|_| String::from("Не указано"))
 }
 
 pub fn back_keyboard() -> InlineKeyboardMarkup {
