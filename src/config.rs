@@ -23,6 +23,7 @@ pub struct TrialConfig {
 
 #[derive(Clone)]
 pub struct ServiceConfig {
+    pub test_telegram_ids: Vec<u64>,
     pub support_telegram_url: Url,
     pub support_email: String,
 
@@ -48,6 +49,7 @@ impl Config {
         }
 
         let service = ServiceConfig {
+            test_telegram_ids: parse_test_ids(optional("TEST_TELEGRAM_IDS").as_deref())?,
             support_telegram_url: required_url("SERVICE_SUPPORT_TELEGRAM_URL")?,
             support_email: required("SERVICE_SUPPORT_EMAIL")?,
 
@@ -67,6 +69,44 @@ impl Config {
             trial,
             service,
         })
+    }
+}
+
+fn parse_test_ids(value: Option<&str>) -> Result<Vec<u64>, ConfigError> {
+    value
+        .unwrap_or("")
+        .split(',')
+        .filter(|id| !id.trim().is_empty())
+        .map(|id| {
+            id.trim()
+                .parse::<u64>()
+                .ok()
+                .filter(|id| *id > 0)
+                .ok_or(ConfigError::InvalidVariable("TEST_TELEGRAM_IDS"))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_test_ids;
+
+    #[test]
+    fn test_controls_default_to_disabled() {
+        assert!(parse_test_ids(None).unwrap().is_empty());
+        assert!(parse_test_ids(Some("  ")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_controls_accept_multiple_explicit_users() {
+        assert_eq!(parse_test_ids(Some("123, 456")).unwrap(), vec![123, 456]);
+    }
+
+    #[test]
+    fn test_controls_reject_invalid_user_ids() {
+        for value in ["0", "-1", "123,all", "18446744073709551616"] {
+            assert!(parse_test_ids(Some(value)).is_err(), "{value}");
+        }
     }
 }
 

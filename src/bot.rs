@@ -145,6 +145,23 @@ async fn handle_callback(
 
     register_user(&database, query.from.id.0).await;
 
+    if data.starts_with("test_paid:") || data.starts_with("test_activate:") {
+        if !service.test_telegram_ids.contains(&query.from.id.0) {
+            return Ok(());
+        }
+        let result = run_test_action(data, query.from.id.0, &database, &remnawave).await;
+        let text = match result {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::error!(error = %error, "Тестовое действие не выполнено");
+                "⚠️ Тестовое действие не выполнено. Подробности в журнале бота.".to_owned()
+            }
+        };
+        // Keep the order controls available for activation and repeat-click checks.
+        bot.send_message(message.chat.id, text).await?;
+        return Ok(());
+    }
+
     if let Some(code) = data.strip_prefix(ui::CALLBACK_TARIFF_PREFIX) {
         show_tariff(&bot, message, code, &tariffs, &service).await?;
 
@@ -215,6 +232,71 @@ async fn handle_callback(
     }
 
     Ok(())
+}
+
+async fn run_test_action(
+    data: &str,
+    telegram_id: u64,
+    database: &Database,
+    remnawave: &RemnawaveClient,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    use crate::{
+        activation::{ActivationResult, ActivationService},
+        database::MarkPaymentPaidResult,
+    };
+
+    // The existing activation service does not serialize concurrent attempts.
+    static TEST_ACTION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let Ok(_guard) = TEST_ACTION_LOCK.try_lock() else {
+        return Ok(
+            "⏳ Тестовое действие выполняется. Повторите через несколько секунд.".to_owned(),
+        );
+    };
+
+    let (action, id) = data.split_once(':').ok_or("missing order ID")?;
+    let order_id: i64 = id.parse()?;
+    let Some(order) = database.get_order(order_id).await? else {
+        return Ok("⚠️ Заказ не найден.".to_owned());
+    };
+    if u64::try_from(order.telegram_id).ok() != Some(telegram_id) {
+        return Ok("⚠️ Заказ недоступен.".to_owned());
+    }
+    let outcome = match action {
+        "test_paid" => {
+            let payment = database
+                .get_or_create_payment(&order, PROVIDER_PLATEGA)
+                .await?;
+            match database.mark_payment_paid(payment.id).await? {
+                MarkPaymentPaidResult::Applied => {
+                    "🧪 Оплата отмечена: payment и order — paid. Теперь нажмите «⚡ Тест: активировать»."
+                }
+                MarkPaymentPaidResult::AlreadyPaid => {
+                    "🧪 Оплата уже отмечена. Можно активировать заказ."
+                }
+                MarkPaymentPaidResult::OrderNotPayable => "⚠️ Этот заказ нельзя оплатить.",
+                MarkPaymentPaidResult::NotFound => "⚠️ Платёж не найден.",
+            }
+        }
+        "test_activate" => {
+            if order.status != "paid" {
+                return Ok("⚠️ Сначала отметьте оплату заказа.".to_owned());
+            }
+            match ActivationService::new(database.clone(), remnawave.clone())
+                .activate_order(order.id)
+                .await?
+            {
+                ActivationResult::Created(_) => {
+                    "⚡ Подписка создана. Ссылка доступна в главном меню."
+                }
+                ActivationResult::Updated(_) => {
+                    "⚡ Подписка продлена. Ссылка доступна в главном меню."
+                }
+                ActivationResult::AlreadyActivated => "⚡ Этот заказ уже активирован.",
+            }
+        }
+        _ => return Err("unknown test action".into()),
+    };
+    Ok(format!("Заказ #{}\n\n{}", order.id, outcome))
 }
 
 async fn register_message_user(database: &Database, message: &Message) {
@@ -331,7 +413,17 @@ async fn show_checkout(
 
             let text = ui::order_text(&order);
 
-            edit_screen(bot, message, &text, ui::order_keyboard(service)).await?;
+            edit_screen(
+                bot,
+                message,
+                &text,
+                ui::order_keyboard(
+                    service,
+                    order.id,
+                    service.test_telegram_ids.contains(&telegram_id),
+                ),
+            )
+            .await?;
 
             return Ok(());
         }
@@ -369,7 +461,17 @@ async fn show_checkout(
 
             let text = ui::order_text(&order);
 
-            edit_screen(bot, message, &text, ui::order_keyboard(service)).await?;
+            edit_screen(
+                bot,
+                message,
+                &text,
+                ui::order_keyboard(
+                    service,
+                    order.id,
+                    service.test_telegram_ids.contains(&telegram_id),
+                ),
+            )
+            .await?;
         }
 
         Err(error) => {
@@ -391,9 +493,7 @@ async fn show_checkout(
         }
     }
 
-    let text = ui::checkout_text(tariff);
-
-    edit_screen(bot, message, &text, ui::checkout_keyboard(service)).await
+    Ok(())
 }
 
 async fn show_trial(
