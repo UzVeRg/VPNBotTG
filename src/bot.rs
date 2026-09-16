@@ -11,6 +11,7 @@ use teloxide::{
 use crate::{
     config::ServiceConfig,
     database::{Database, NewOrder},
+    payment::PROVIDER_PLATEGA,
     remnawave::{RemnawaveClient, RemnawaveUser},
     tariff::{Tariff, TariffCatalog},
     trial::{TrialIssueResult, TrialService},
@@ -286,6 +287,30 @@ async fn show_checkout(
         return Ok(());
     };
 
+    async fn prepare_payment(database: &Database, order: &crate::database::Order) {
+        match database
+            .get_or_create_payment(order, PROVIDER_PLATEGA)
+            .await
+        {
+            Ok(payment) => {
+                tracing::info!(
+                    order_id = order.id,
+                    payment_id = payment.id,
+                    payment_status = payment.status,
+                    "Локальный платёж подготовлен"
+                );
+            }
+
+            Err(error) => {
+                tracing::error!(
+                    order_id = order.id,
+                    error = %error,
+                    "Не удалось подготовить локальный платёж"
+                );
+            }
+        }
+    }
+
     fn order_matches_tariff(order: &crate::database::Order, tariff: &Tariff) -> bool {
         let order_traffic = match order.traffic_gib {
             Some(value) => u64::try_from(value).ok(),
@@ -302,6 +327,8 @@ async fn show_checkout(
 
     match database.get_user_pending_order(telegram_id).await {
         Ok(Some(order)) if order_matches_tariff(&order, tariff) => {
+            prepare_payment(database, &order).await;
+
             let text = ui::order_text(&order);
 
             edit_screen(bot, message, &text, ui::order_keyboard(service)).await?;
@@ -338,6 +365,8 @@ async fn show_checkout(
         .await
     {
         Ok(order) => {
+            prepare_payment(database, &order).await;
+
             let text = ui::order_text(&order);
 
             edit_screen(bot, message, &text, ui::order_keyboard(service)).await?;
