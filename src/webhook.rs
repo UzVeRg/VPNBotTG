@@ -26,11 +26,7 @@ pub struct WebhookState {
 }
 
 impl WebhookState {
-    pub fn new(
-        database: Database,
-        activation: ActivationService,
-        config: PlategaConfig,
-    ) -> Self {
+    pub fn new(database: Database, activation: ActivationService, config: PlategaConfig) -> Self {
         Self {
             database,
             activation,
@@ -40,10 +36,7 @@ impl WebhookState {
     }
 }
 
-pub async fn serve(
-    bind: SocketAddr,
-    state: WebhookState,
-) -> std::io::Result<()> {
+pub async fn serve(bind: SocketAddr, state: WebhookState) -> std::io::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/platega/webhook", post(platega_webhook))
@@ -97,10 +90,7 @@ async fn platega_webhook(
 
     let payment = match state
         .database
-        .get_payment_by_provider_payment_id(
-            PROVIDER_PLATEGA,
-            &callback.id,
-        )
+        .get_payment_by_provider_payment_id(PROVIDER_PLATEGA, &callback.id)
         .await
     {
         Ok(Some(payment)) => payment,
@@ -129,9 +119,7 @@ async fn platega_webhook(
         return StatusCode::BAD_REQUEST;
     };
 
-    if amount_kopecks != payment.amount_kopecks
-        || callback.currency != payment.currency
-    {
+    if amount_kopecks != payment.amount_kopecks || callback.currency != payment.currency {
         tracing::error!(
             payment_id = payment.id,
             transaction_id = callback.id,
@@ -142,8 +130,7 @@ async fn platega_webhook(
     }
 
     if let Some(payload) = callback.payload.as_deref() {
-        let expected =
-            format!("order:{};payment:{}", payment.order_id, payment.id);
+        let expected = format!("order:{};payment:{}", payment.order_id, payment.id);
 
         if payload != expected {
             tracing::error!(
@@ -159,21 +146,19 @@ async fn platega_webhook(
     match callback.status.as_str() {
         "PENDING" => StatusCode::OK,
 
-        "CANCELED" => {
-            match state.database.mark_payment_cancelled(payment.id).await {
-                Ok(()) => StatusCode::OK,
+        "CANCELED" => match state.database.mark_payment_cancelled(payment.id).await {
+            Ok(()) => StatusCode::OK,
 
-                Err(error) => {
-                    tracing::error!(
-                        payment_id = payment.id,
-                        error = %error,
-                        "Не удалось отменить платёж"
-                    );
+            Err(error) => {
+                tracing::error!(
+                    payment_id = payment.id,
+                    error = %error,
+                    "Не удалось отменить платёж"
+                );
 
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
+                StatusCode::INTERNAL_SERVER_ERROR
             }
-        }
+        },
 
         "CHARGEBACKED" | "CHARGEBACK" => {
             match state.database.mark_payment_chargeback(payment.id).await {
@@ -215,14 +200,8 @@ async fn platega_webhook(
             };
 
             match result {
-                MarkPaymentPaidResult::Applied
-                | MarkPaymentPaidResult::AlreadyPaid =>
-                {
-                    match state
-                        .activation
-                        .activate_order(payment.order_id)
-                        .await
-                    {
+                MarkPaymentPaidResult::Applied | MarkPaymentPaidResult::AlreadyPaid => {
+                    match state.activation.activate_order(payment.order_id).await {
                         Ok(_) => {
                             tracing::info!(
                                 payment_id = payment.id,
@@ -265,15 +244,8 @@ async fn platega_webhook(
     }
 }
 
-fn header_matches(
-    headers: &HeaderMap,
-    name: &'static str,
-    expected: &str,
-) -> bool {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        == Some(expected)
+fn header_matches(headers: &HeaderMap, name: &'static str, expected: &str) -> bool {
+    headers.get(name).and_then(|value| value.to_str().ok()) == Some(expected)
 }
 
 fn amount_to_kopecks(amount: f64) -> Option<i64> {

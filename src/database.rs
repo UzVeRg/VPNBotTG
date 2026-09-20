@@ -520,10 +520,10 @@ impl Database {
         .bind(provider_payment_id)
         .fetch_optional(&self.pool)
         .await?;
-    
+
         Ok(payment)
     }
-    
+
     pub async fn get_payment_by_idempotency_key(
         &self,
         idempotency_key: &str,
@@ -625,12 +625,9 @@ impl Database {
         payment.ok_or(DatabaseError::PaymentProviderConflict)
     }
 
-    pub async fn mark_payment_cancelled(
-        &self,
-        payment_id: i64,
-    ) -> Result<(), DatabaseError> {
+    pub async fn mark_payment_cancelled(&self, payment_id: i64) -> Result<(), DatabaseError> {
         let mut tx = self.pool.begin().await?;
-    
+
         let payment = sqlx::query_as::<_, (i64, String)>(
             r#"
             SELECT
@@ -644,19 +641,19 @@ impl Database {
         .bind(payment_id)
         .fetch_optional(&mut *tx)
         .await?;
-    
+
         let Some((order_id, status)) = payment else {
             tx.rollback().await?;
-    
+
             return Ok(());
         };
-    
+
         if status == "paid" || status == "chargeback" {
             tx.rollback().await?;
-    
+
             return Ok(());
         }
-    
+
         sqlx::query(
             r#"
             UPDATE payments
@@ -669,7 +666,7 @@ impl Database {
         .bind(payment_id)
         .execute(&mut *tx)
         .await?;
-    
+
         sqlx::query(
             r#"
             UPDATE orders
@@ -683,18 +680,15 @@ impl Database {
         .bind(order_id)
         .execute(&mut *tx)
         .await?;
-    
+
         tx.commit().await?;
-    
+
         Ok(())
     }
-    
-    pub async fn mark_payment_chargeback(
-        &self,
-        payment_id: i64,
-    ) -> Result<(), DatabaseError> {
+
+    pub async fn mark_payment_chargeback(&self, payment_id: i64) -> Result<(), DatabaseError> {
         let mut tx = self.pool.begin().await?;
-    
+
         let order_id = sqlx::query_scalar::<_, i64>(
             r#"
             SELECT order_id
@@ -706,13 +700,13 @@ impl Database {
         .bind(payment_id)
         .fetch_optional(&mut *tx)
         .await?;
-    
+
         let Some(order_id) = order_id else {
             tx.rollback().await?;
-    
+
             return Ok(());
         };
-    
+
         sqlx::query(
             r#"
             UPDATE payments
@@ -725,7 +719,7 @@ impl Database {
         .bind(payment_id)
         .execute(&mut *tx)
         .await?;
-    
+
         sqlx::query(
             r#"
             UPDATE orders
@@ -739,12 +733,12 @@ impl Database {
         .bind(order_id)
         .execute(&mut *tx)
         .await?;
-    
+
         tx.commit().await?;
-    
+
         Ok(())
     }
-    
+
     pub async fn mark_payment_paid(
         &self,
         payment_id: i64,
@@ -789,7 +783,7 @@ impl Database {
 
         if payment.status == "chargeback" {
             tx.rollback().await?;
-        
+
             return Ok(MarkPaymentPaidResult::OrderNotPayable);
         }
 
@@ -805,7 +799,7 @@ impl Database {
         .fetch_one(&mut *tx)
         .await?;
 
-        if order_status != "pending" && order_status != "cancelled" { {
+        if order_status != "pending" && order_status != "cancelled" {
             tx.rollback().await?;
 
             return Ok(MarkPaymentPaidResult::OrderNotPayable);

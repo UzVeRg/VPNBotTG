@@ -10,6 +10,7 @@ mod trial;
 mod ui;
 mod webhook;
 
+use activation::ActivationService;
 use config::Config;
 use database::Database;
 use payment::PaymentService;
@@ -18,7 +19,6 @@ use tariff::TariffCatalog;
 use teloxide::Bot;
 use tracing_subscriber::EnvFilter;
 use trial::TrialService;
-use activation::ActivationService;
 use webhook::WebhookState;
 
 #[tokio::main]
@@ -48,14 +48,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let remnawave =
         RemnawaveClient::new(config.remnawave_url.clone(), config.remnawave_token.clone());
 
-    let activation =
-        ActivationService::new(database.clone(), remnawave.clone());
-    
-    let webhook_state = WebhookState::new(
-        database.clone(),
-        activation,
-        config.platega.clone(),
-    );
+    let activation = ActivationService::new(database.clone(), remnawave.clone());
+
+    let webhook_state = WebhookState::new(database.clone(), activation, config.platega.clone());
 
     let payments = PaymentService::new(database.clone(), config.platega.clone())?;
 
@@ -67,10 +62,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             bind = %webhook_bind,
             "HTTP endpoint Platega запущен"
         );
-    
-        if let Err(error) =
-            webhook::serve(webhook_bind, webhook_state).await
-        {
+
+        if let Err(error) = webhook::serve(webhook_bind, webhook_state).await {
             tracing::error!(
                 error = %error,
                 "HTTP endpoint Platega остановлен с ошибкой"
