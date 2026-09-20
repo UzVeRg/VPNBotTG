@@ -61,7 +61,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("VPNBotTG запущен");
 
-    bot::run(bot, remnawave, trial, database, tariffs, config.service).await;
+    bot::run(
+        bot,
+        remnawave,
+        trial,
+        database,
+        tariffs,
+        payments,
+        config.service,
+    )
+    .await;
 
     webhook_task.abort();
 

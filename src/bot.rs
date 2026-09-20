@@ -12,7 +12,7 @@ use crate::{
     config::ServiceConfig,
     database::{Database, NewOrder},
     device::{DeviceError, DeviceService},
-    payment::PROVIDER_PLATEGA,
+    payment::{PaymentError, PaymentService},
     remnawave::{RemnawaveClient, RemnawaveUser},
     tariff::{Tariff, TariffCatalog},
     trial::{TrialIssueResult, TrialService},
@@ -22,7 +22,6 @@ use crate::{
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 enum Command {
-    /// Открыть главное меню.
     Start,
 }
 
@@ -32,6 +31,7 @@ pub async fn run(
     trial: TrialService,
     database: Database,
     tariffs: TariffCatalog,
+    payments: PaymentService,
     service: ServiceConfig,
 ) {
     configure_profile(&bot).await;
@@ -46,7 +46,9 @@ pub async fn run(
         .branch(Update::filter_message().endpoint(handle_other_message));
 
     Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![remnawave, trial, database, tariffs, service])
+        .dependencies(dptree::deps![
+            remnawave, trial, database, tariffs, payments, service
+        ])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
@@ -129,6 +131,7 @@ async fn handle_callback(
     database: Database,
     tariffs: TariffCatalog,
     service: ServiceConfig,
+    payments: PaymentService,
 ) -> ResponseResult<()> {
     bot.answer_callback_query(query.id.clone()).await?;
 
@@ -180,6 +183,7 @@ async fn handle_callback(
             &tariffs,
             &database,
             &service,
+            &payments,
         )
         .await?;
 
@@ -351,6 +355,7 @@ async fn show_checkout(
     code: &str,
     tariffs: &TariffCatalog,
     database: &Database,
+    payments: &PaymentService,
     service: &ServiceConfig,
 ) -> ResponseResult<()> {
     let Some(tariff) = tariffs.get_active(code) else {
@@ -364,30 +369,6 @@ async fn show_checkout(
 
         return Ok(());
     };
-
-    async fn prepare_payment(database: &Database, order: &crate::database::Order) {
-        match database
-            .get_or_create_payment(order, PROVIDER_PLATEGA)
-            .await
-        {
-            Ok(payment) => {
-                tracing::info!(
-                    order_id = order.id,
-                    payment_id = payment.id,
-                    payment_status = payment.status,
-                    "Локальный платёж подготовлен"
-                );
-            }
-
-            Err(error) => {
-                tracing::error!(
-                    order_id = order.id,
-                    error = %error,
-                    "Не удалось подготовить локальный платёж"
-                );
-            }
-        }
-    }
 
     fn order_matches_tariff(order: &crate::database::Order, tariff: &Tariff) -> bool {
         let order_traffic = match order.traffic_gib {
@@ -405,13 +386,7 @@ async fn show_checkout(
 
     match database.get_user_pending_order(telegram_id).await {
         Ok(Some(order)) if order_matches_tariff(&order, tariff) => {
-            prepare_payment(database, &order).await;
-
-            let text = ui::order_text(&order);
-
-            edit_screen(bot, message, &text, ui::order_keyboard(service)).await?;
-
-            return Ok(());
+            return show_order(bot, message, &order, payments, service).await;
         }
 
         Ok(_) => {}
@@ -425,30 +400,21 @@ async fn show_checkout(
         }
     }
 
-    match database
+    let order = match database
         .create_order(NewOrder {
             telegram_id,
-
             tariff_code: tariff.code.clone(),
             tariff_name: tariff.name.clone(),
             tariff_description: tariff.description.clone(),
-
             price_kopecks: tariff.price_kopecks,
             duration_days: tariff.duration_days,
             traffic_gib: tariff.traffic_gib,
             hwid_limit: tariff.hwid_limit,
-
             internal_squad_names: tariff.internal_squad_names.clone(),
         })
         .await
     {
-        Ok(order) => {
-            prepare_payment(database, &order).await;
-
-            let text = ui::order_text(&order);
-
-            edit_screen(bot, message, &text, ui::order_keyboard(service)).await?;
-        }
+        Ok(order) => order,
 
         Err(error) => {
             tracing::error!(
@@ -466,12 +432,58 @@ async fn show_checkout(
                 ui::tariffs_keyboard(tariffs),
             )
             .await?;
+
+            return Ok(());
+        }
+    };
+
+    show_order(bot, message, &order, payments, service).await
+}
+
+async fn show_order(
+    bot: &Bot,
+    message: &Message,
+    order: &crate::database::Order,
+    payments: &PaymentService,
+    service: &ServiceConfig,
+) -> ResponseResult<()> {
+    match payments.prepare_order(order).await {
+        Ok(payment) => {
+            tracing::info!(
+                order_id = order.id,
+                payment_id = payment.id,
+                provider_payment_id = ?payment.provider_payment_id,
+                "Платёж подготовлен"
+            );
+
+            let text = ui::order_text(order, Some(&payment));
+            let keyboard = ui::order_keyboard(service, order, Some(&payment));
+
+            edit_screen(bot, message, &text, keyboard).await
+        }
+
+        Err(PaymentError::NotConfigured) => {
+            tracing::info!(order_id = order.id, "Platega API пока не настроен");
+
+            let text = ui::order_text(order, None);
+            let keyboard = ui::order_keyboard(service, order, None);
+
+            edit_screen(bot, message, &text, keyboard).await
+        }
+
+        Err(error) => {
+            tracing::error!(
+                order_id = order.id,
+                error = %error,
+                "Не удалось подготовить платёж Platega"
+            );
+
+            let text = ui::order_text(order, None);
+            let keyboard = ui::order_keyboard(service, order, None);
+
+            edit_screen(bot, message, &text, keyboard).await
         }
     }
-
-    let text = ui::checkout_text(tariff);
-
-    edit_screen(bot, message, &text, ui::checkout_keyboard(service)).await
 }
 
 async fn show_trial(

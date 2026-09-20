@@ -1,6 +1,6 @@
 use crate::{
     config::{ServiceConfig, TrialConfig},
-    database::Order,
+    database::{Order, Payment},
     device::{DeviceList, device_token},
     remnawave::HwidDevice,
     tariff::{Tariff, TariffCatalog},
@@ -447,34 +447,68 @@ pub fn documents_keyboard(service: &ServiceConfig) -> InlineKeyboardMarkup {
     ])
 }
 
-pub fn order_text(order: &Order) -> String {
+pub fn order_text(order: &Order, payment: Option<&Payment>) -> String {
+    let payment_state = if payment
+        .and_then(|payment| payment.payment_url.as_ref())
+        .is_some()
+    {
+        "Платёжная ссылка создана.\nНажмите «Оплатить» ниже."
+    } else {
+        "Заказ сохранён.\n\
+         Платёжная ссылка пока недоступна.\n\
+         Попробуйте снова немного позже."
+    };
+
     format!(
         "🧾 Заказ #{}\n\n\
          Тариф: {}\n\
          Сумма: {} ₽\n\
          Срок доступа: {} дней\n\
          Статус: ожидает оплаты\n\n\
-         Заказ создан и сохранён.\n\
-         Оплата для него пока недоступна.",
+         {}",
         order.id,
         order.tariff_name,
         order.price_kopecks / 100,
         order.duration_days,
+        payment_state,
     )
 }
 
-pub fn order_keyboard(service: &ServiceConfig) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new([
-        vec![
-            InlineKeyboardButton::url("📜 Соглашение", service.user_agreement_url.clone()),
-            InlineKeyboardButton::url("🔐 Конфиденциальность", service.privacy_url.clone()),
-        ],
-        vec![InlineKeyboardButton::callback("⬅️ К тарифам", CALLBACK_BUY)],
-        vec![InlineKeyboardButton::callback(
-            "🏠 Главное меню",
-            CALLBACK_HOME,
-        )],
-    ])
+pub fn order_keyboard(
+    service: &ServiceConfig,
+    order: &Order,
+    payment: Option<&Payment>,
+) -> InlineKeyboardMarkup {
+    let mut rows = Vec::new();
+
+    if let Some(url) = payment
+        .and_then(|payment| payment.payment_url.as_deref())
+        .and_then(|value| reqwest::Url::parse(value).ok())
+    {
+        rows.push(vec![InlineKeyboardButton::url("💳 Оплатить", url)]);
+    } else {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "🔄 Попробовать снова",
+            format!("{CALLBACK_CHECKOUT_PREFIX}{}", order.tariff_code),
+        )]);
+    }
+
+    rows.push(vec![
+        InlineKeyboardButton::url("📜 Соглашение", service.user_agreement_url.clone()),
+        InlineKeyboardButton::url("🔐 Конфиденциальность", service.privacy_url.clone()),
+    ]);
+
+    rows.push(vec![InlineKeyboardButton::callback(
+        "⬅️ К тарифам",
+        CALLBACK_BUY,
+    )]);
+
+    rows.push(vec![InlineKeyboardButton::callback(
+        "🏠 Главное меню",
+        CALLBACK_HOME,
+    )]);
+
+    InlineKeyboardMarkup::new(rows)
 }
 
 pub fn about_text(trial: &TrialConfig) -> String {
