@@ -46,6 +46,18 @@ impl PaymentService {
             .await
             .map_err(PaymentError::from)
     }
+
+    pub async fn get_provider_status(
+        &self,
+        payment: &Payment,
+    ) -> Result<ProviderPaymentStatus, PaymentError> {
+        let transaction_id = payment
+            .provider_payment_id
+            .as_deref()
+            .ok_or(PaymentError::MissingProviderPaymentId)?;
+
+        self.platega.get_transaction(transaction_id).await
+    }
 }
 
 #[derive(Clone)]
@@ -143,6 +155,58 @@ impl PlategaClient {
             payment_url: payment_url.to_string(),
         })
     }
+
+    async fn get_transaction(
+        &self,
+        transaction_id: &str,
+    ) -> Result<ProviderPaymentStatus, PaymentError> {
+        let merchant_id = self
+            .merchant_id
+            .as_deref()
+            .ok_or(PaymentError::NotConfigured)?;
+
+        let api_key = self.api_key.as_deref().ok_or(PaymentError::NotConfigured)?;
+
+        let endpoint = self
+            .base_url
+            .join(&format!("transaction/{transaction_id}"))
+            .map_err(|_| PaymentError::InvalidEndpoint)?;
+
+        let response = self
+            .http
+            .get(endpoint)
+            .header("X-MerchantId", merchant_id)
+            .header("X-Secret", api_key)
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        if status.as_u16() == 404 {
+            return Err(PaymentError::ProviderTransactionNotFound);
+        }
+
+        if !status.is_success() {
+            return Err(PaymentError::ApiStatus(status.as_u16()));
+        }
+
+        let response = response.json::<TransactionStatusResponse>().await?;
+
+        if response.id != transaction_id {
+            return Err(PaymentError::InvalidResponse);
+        }
+
+        let amount_kopecks = rubles_to_kopecks(response.payment_details.amount)
+            .ok_or(PaymentError::InvalidResponse)?;
+
+        Ok(ProviderPaymentStatus {
+            transaction_id: response.id,
+            status: response.status,
+            amount_kopecks,
+            currency: response.payment_details.currency,
+            payload: response.payload,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -185,6 +249,49 @@ struct CreatedTransaction {
     payment_url: String,
 }
 
+fn rubles_to_kopecks(amount: f64) -> Option<i64> {
+    if !amount.is_finite() || amount <= 0.0 {
+        return None;
+    }
+
+    let value = amount * 100.0;
+    let rounded = value.round();
+
+    if (value - rounded).abs() > 0.000001 {
+        return None;
+    }
+
+    if rounded > i64::MAX as f64 {
+        return None;
+    }
+
+    Some(rounded as i64)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransactionStatusResponse {
+    id: String,
+    status: String,
+    payment_details: TransactionPaymentDetails,
+    payload: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TransactionPaymentDetails {
+    amount: f64,
+    currency: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderPaymentStatus {
+    pub transaction_id: String,
+    pub status: String,
+    pub amount_kopecks: i64,
+    pub currency: String,
+    pub payload: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum PaymentError {
     #[error("Platega API пока не настроен")]
@@ -210,4 +317,10 @@ pub enum PaymentError {
 
     #[error("ошибка базы данных: {0}")]
     Database(#[from] DatabaseError),
+
+    #[error("у локального платежа отсутствует ID транзакции Platega")]
+    MissingProviderPaymentId,
+
+    #[error("транзакция Platega не найдена")]
+    ProviderTransactionNotFound,
 }

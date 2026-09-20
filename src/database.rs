@@ -689,9 +689,9 @@ impl Database {
     pub async fn mark_payment_chargeback(&self, payment_id: i64) -> Result<(), DatabaseError> {
         let mut tx = self.pool.begin().await?;
 
-        let order_id = sqlx::query_scalar::<_, i64>(
+        let exists = sqlx::query_scalar::<_, i64>(
             r#"
-            SELECT order_id
+            SELECT id
             FROM payments
             WHERE id = $1
             FOR UPDATE
@@ -701,11 +701,11 @@ impl Database {
         .fetch_optional(&mut *tx)
         .await?;
 
-        let Some(order_id) = order_id else {
+        if exists.is_none() {
             tx.rollback().await?;
 
             return Ok(());
-        };
+        }
 
         sqlx::query(
             r#"
@@ -717,20 +717,6 @@ impl Database {
             "#,
         )
         .bind(payment_id)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            r#"
-            UPDATE orders
-            SET
-                status = 'cancelled',
-                updated_at = NOW()
-            WHERE id = $1
-              AND status <> 'cancelled'
-            "#,
-        )
-        .bind(order_id)
         .execute(&mut *tx)
         .await?;
 
