@@ -89,10 +89,6 @@ impl Config {
             failed_url: required_url("PLATEGA_FAILED_URL")?,
         };
 
-        if platega.merchant_id.is_some() != platega.api_key.is_some() {
-            return Err(ConfigError::IncompletePlategaCredentials);
-        }
-
         Ok(Self {
             telegram_token: required("TELOXIDE_TOKEN")?,
             remnawave_url: required("REMNAWAVE_URL")?,
@@ -147,7 +143,4 @@ pub enum ConfigError {
 
     #[error("некорректные параметры пробной подписки")]
     InvalidTrialConfiguration,
-
-    #[error("Merchant ID и API key Platega должны быть заданы одновременно")]
-    IncompletePlategaCredentials,
 }

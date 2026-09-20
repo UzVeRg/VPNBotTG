@@ -34,9 +34,9 @@ fn long_unicode_hwid_and_labels_fit_telegram_limits() {
     let (confirmation, keyboard) = device_confirmation_screen(&item);
     assert!(confirmation.chars().count() < 4096);
     assert!(callbacks(&keyboard).iter().all(|data| data.len() <= 64));
-    ///assert!(
-    ///    callbacks(&keyboard).contains(&format!("{CALLBACK_DEVICE_DELETE_PREFIX}{token}").as_str())
-    ///);
+    //assert!(
+    //    callbacks(&keyboard).contains(&format!("{CALLBACK_DEVICE_DELETE_PREFIX}{token}").as_str())
+    //);
     assert_eq!(callbacks(&keyboard), vec![CALLBACK_DEVICES]);
 }
 
