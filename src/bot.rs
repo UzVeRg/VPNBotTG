@@ -182,8 +182,8 @@ async fn handle_callback(
             code,
             &tariffs,
             &database,
-            &service,
             &payments,
+            &service,
         )
         .await?;
 
