@@ -23,6 +23,19 @@ pub struct TrialConfig {
 }
 
 #[derive(Clone)]
+pub struct ServiceConfig {
+    pub support_telegram_url: Url,
+    pub support_email: String,
+
+    pub phone: Option<String>,
+    pub contact_address: Option<String>,
+
+    pub docs_url: Url,
+    pub user_agreement_url: Url,
+    pub privacy_url: Url,
+}
+
+#[derive(Clone)]
 pub struct PlategaConfig {
     pub base_url: Url,
     pub merchant_id: Option<String>,
@@ -75,7 +88,7 @@ impl Config {
             return_url: required_url("PLATEGA_RETURN_URL")?,
             failed_url: required_url("PLATEGA_FAILED_URL")?,
         };
-        
+
         if platega.merchant_id.is_some() != platega.api_key.is_some() {
             return Err(ConfigError::IncompletePlategaCredentials);
         }
