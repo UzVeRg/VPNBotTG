@@ -545,6 +545,53 @@ impl Database {
         .await
     }
 
+    pub async fn set_payment_provider_data(
+        &self,
+        payment_id: i64,
+        provider_payment_id: &str,
+        payment_url: &str,
+    ) -> Result<Payment, DatabaseError> {
+        let payment = sqlx::query_as::<_, Payment>(
+            r#"
+            UPDATE payments
+            SET
+                provider_payment_id = $2,
+                payment_url = $3,
+                status = CASE
+                    WHEN status = 'created' THEN 'pending'
+                    ELSE status
+                END,
+                updated_at = NOW()
+            WHERE id = $1
+              AND status IN ('created', 'pending')
+              AND (
+                  provider_payment_id IS NULL
+                  OR provider_payment_id = $2
+              )
+            RETURNING
+                id,
+                order_id,
+                provider,
+                provider_payment_id,
+                idempotency_key,
+                amount_kopecks,
+                currency,
+                status,
+                payment_url,
+                created_at,
+                updated_at,
+                paid_at
+            "#,
+        )
+        .bind(payment_id)
+        .bind(provider_payment_id)
+        .bind(payment_url)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        payment.ok_or(DatabaseError::PaymentProviderConflict)
+    }
+
     pub async fn mark_payment_paid(
         &self,
         payment_id: i64,
@@ -927,4 +974,7 @@ pub enum DatabaseError {
 
     #[error("значение заказа не помещается в тип PostgreSQL")]
     InvalidOrderValue,
+
+    #[error("платёж уже связан с другой транзакцией провайдера")]
+    PaymentProviderConflict,
 }

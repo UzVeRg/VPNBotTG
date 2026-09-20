@@ -12,6 +12,7 @@ mod webhook;
 
 use config::Config;
 use database::Database;
+use payment::PaymentService;
 use remnawave::RemnawaveClient;
 use tariff::TariffCatalog;
 use teloxide::Bot;
@@ -44,6 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let remnawave =
         RemnawaveClient::new(config.remnawave_url.clone(), config.remnawave_token.clone());
+
+    let payments = PaymentService::new(database.clone(), config.platega.clone())?;
 
     let trial =
         TrialService::new(database.clone(), remnawave.clone(), config.trial.clone()).await?;

@@ -246,11 +246,6 @@ async fn handle_devices(
 ) -> ResponseResult<()> {
     let screen = if let Some(token) = data.strip_prefix(ui::CALLBACK_DEVICE_PREFIX) {
         //CALLBACK_DEVICE_DELETE_PREFIX
-        devices.delete(telegram_id, token).await.map(|list| {
-            let (text, keyboard) = ui::devices_screen(&list, 0);
-            (format!("✅ Устройство удалено.\n\n{text}"), keyboard)
-        })
-    } else if let Some(token) = data.strip_prefix(ui::CALLBACK_DEVICE_PREFIX) {
         devices
             .get(telegram_id, token)
             .await
@@ -260,6 +255,7 @@ async fn handle_devices(
             .strip_prefix(ui::CALLBACK_DEVICES_PAGE_PREFIX)
             .and_then(|page| page.parse::<usize>().ok())
             .unwrap_or(0);
+
         devices
             .list(telegram_id)
             .await
