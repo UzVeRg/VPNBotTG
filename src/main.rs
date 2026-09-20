@@ -18,6 +18,8 @@ use tariff::TariffCatalog;
 use teloxide::Bot;
 use tracing_subscriber::EnvFilter;
 use trial::TrialService;
+use activation::ActivationService;
+use webhook::WebhookState;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,16 +48,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let remnawave =
         RemnawaveClient::new(config.remnawave_url.clone(), config.remnawave_token.clone());
 
+    let activation =
+        ActivationService::new(database.clone(), remnawave.clone());
+    
+    let webhook_state = WebhookState::new(
+        database.clone(),
+        activation,
+        config.platega.clone(),
+    );
+
     let payments = PaymentService::new(database.clone(), config.platega.clone())?;
 
     let trial =
         TrialService::new(database.clone(), remnawave.clone(), config.trial.clone()).await?;
 
     let webhook_task = tokio::spawn(async move {
-        tracing::info!(bind = %webhook_bind, "HTTP endpoint Platega запущен");
-
-        if let Err(error) = webhook::serve(webhook_bind).await {
-            tracing::error!(error = %error, "HTTP endpoint Platega остановлен с ошибкой");
+        tracing::info!(
+            bind = %webhook_bind,
+            "HTTP endpoint Platega запущен"
+        );
+    
+        if let Err(error) =
+            webhook::serve(webhook_bind, webhook_state).await
+        {
+            tracing::error!(
+                error = %error,
+                "HTTP endpoint Platega остановлен с ошибкой"
+            );
         }
     });
 

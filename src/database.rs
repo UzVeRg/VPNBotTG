@@ -491,6 +491,39 @@ impl Database {
         Ok(payment)
     }
 
+    pub async fn get_payment_by_provider_payment_id(
+        &self,
+        provider: &str,
+        provider_payment_id: &str,
+    ) -> Result<Option<Payment>, DatabaseError> {
+        let payment = sqlx::query_as::<_, Payment>(
+            r#"
+            SELECT
+                id,
+                order_id,
+                provider,
+                provider_payment_id,
+                idempotency_key,
+                amount_kopecks,
+                currency,
+                status,
+                payment_url,
+                created_at,
+                updated_at,
+                paid_at
+            FROM payments
+            WHERE provider = $1
+              AND provider_payment_id = $2
+            "#,
+        )
+        .bind(provider)
+        .bind(provider_payment_id)
+        .fetch_optional(&self.pool)
+        .await?;
+    
+        Ok(payment)
+    }
+    
     pub async fn get_payment_by_idempotency_key(
         &self,
         idempotency_key: &str,
@@ -592,6 +625,126 @@ impl Database {
         payment.ok_or(DatabaseError::PaymentProviderConflict)
     }
 
+    pub async fn mark_payment_cancelled(
+        &self,
+        payment_id: i64,
+    ) -> Result<(), DatabaseError> {
+        let mut tx = self.pool.begin().await?;
+    
+        let payment = sqlx::query_as::<_, (i64, String)>(
+            r#"
+            SELECT
+                order_id,
+                status
+            FROM payments
+            WHERE id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(payment_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    
+        let Some((order_id, status)) = payment else {
+            tx.rollback().await?;
+    
+            return Ok(());
+        };
+    
+        if status == "paid" || status == "chargeback" {
+            tx.rollback().await?;
+    
+            return Ok(());
+        }
+    
+        sqlx::query(
+            r#"
+            UPDATE payments
+            SET
+                status = 'cancelled',
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(payment_id)
+        .execute(&mut *tx)
+        .await?;
+    
+        sqlx::query(
+            r#"
+            UPDATE orders
+            SET
+                status = 'cancelled',
+                updated_at = NOW()
+            WHERE id = $1
+              AND status = 'pending'
+            "#,
+        )
+        .bind(order_id)
+        .execute(&mut *tx)
+        .await?;
+    
+        tx.commit().await?;
+    
+        Ok(())
+    }
+    
+    pub async fn mark_payment_chargeback(
+        &self,
+        payment_id: i64,
+    ) -> Result<(), DatabaseError> {
+        let mut tx = self.pool.begin().await?;
+    
+        let order_id = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT order_id
+            FROM payments
+            WHERE id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(payment_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    
+        let Some(order_id) = order_id else {
+            tx.rollback().await?;
+    
+            return Ok(());
+        };
+    
+        sqlx::query(
+            r#"
+            UPDATE payments
+            SET
+                status = 'chargeback',
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(payment_id)
+        .execute(&mut *tx)
+        .await?;
+    
+        sqlx::query(
+            r#"
+            UPDATE orders
+            SET
+                status = 'cancelled',
+                updated_at = NOW()
+            WHERE id = $1
+              AND status <> 'cancelled'
+            "#,
+        )
+        .bind(order_id)
+        .execute(&mut *tx)
+        .await?;
+    
+        tx.commit().await?;
+    
+        Ok(())
+    }
+    
     pub async fn mark_payment_paid(
         &self,
         payment_id: i64,
@@ -634,6 +787,12 @@ impl Database {
             return Ok(MarkPaymentPaidResult::AlreadyPaid);
         }
 
+        if payment.status == "chargeback" {
+            tx.rollback().await?;
+        
+            return Ok(MarkPaymentPaidResult::OrderNotPayable);
+        }
+
         let order_status = sqlx::query_scalar::<_, String>(
             r#"
             SELECT status
@@ -646,7 +805,7 @@ impl Database {
         .fetch_one(&mut *tx)
         .await?;
 
-        if order_status != "pending" {
+        if order_status != "pending" && order_status != "cancelled" { {
             tx.rollback().await?;
 
             return Ok(MarkPaymentPaidResult::OrderNotPayable);
@@ -673,7 +832,7 @@ impl Database {
                 status = 'paid',
                 updated_at = NOW()
             WHERE id = $1
-              AND status = 'pending'
+                AND status IN ('pending', 'cancelled')
             "#,
         )
         .bind(payment.order_id)
