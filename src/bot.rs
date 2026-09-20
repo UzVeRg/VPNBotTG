@@ -9,10 +9,11 @@ use teloxide::{
 };
 
 use crate::{
+    activation::ActivationService,
     config::ServiceConfig,
-    database::{Database, NewOrder},
+    database::{Database, MarkPaymentPaidResult, NewOrder},
     device::{DeviceError, DeviceService},
-    payment::{PaymentError, PaymentService},
+    payment::{PROVIDER_PLATEGA, PaymentError, PaymentService},
     remnawave::{RemnawaveClient, RemnawaveUser},
     tariff::{Tariff, TariffCatalog},
     trial::{TrialIssueResult, TrialService},
@@ -32,6 +33,7 @@ pub async fn run(
     database: Database,
     tariffs: TariffCatalog,
     payments: PaymentService,
+    activation: ActivationService,
     service: ServiceConfig,
 ) {
     configure_profile(&bot).await;
@@ -47,7 +49,7 @@ pub async fn run(
 
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![
-            remnawave, trial, database, tariffs, payments, service
+            remnawave, trial, database, tariffs, payments, activation, service
         ])
         .enable_ctrlc_handler()
         .build()
@@ -132,6 +134,7 @@ async fn handle_callback(
     tariffs: TariffCatalog,
     service: ServiceConfig,
     payments: PaymentService,
+    activation: ActivationService,
 ) -> ResponseResult<()> {
     bot.answer_callback_query(query.id.clone()).await?;
 
@@ -188,6 +191,25 @@ async fn handle_callback(
         .await?;
 
         return Ok(());
+    }
+
+    if let Some(value) = data.strip_prefix(ui::CALLBACK_PAYMENT_PREFIX) {
+        let Ok(payment_id) = value.parse::<i64>() else {
+            tracing::warn!(callback = data, "Некорректный callback платежа");
+            return Ok(());
+        };
+
+        return check_payment(
+            &bot,
+            message,
+            query.from.id.0,
+            payment_id,
+            &database,
+            &payments,
+            &activation,
+            &service,
+        )
+        .await;
     }
 
     match data {
@@ -484,6 +506,373 @@ async fn show_order(
             edit_screen(bot, message, &text, keyboard).await
         }
     }
+}
+
+async fn check_payment(
+    bot: &Bot,
+    message: &Message,
+    telegram_id: u64,
+    payment_id: i64,
+    database: &Database,
+    payments: &PaymentService,
+    activation: &ActivationService,
+    service: &ServiceConfig,
+) -> ResponseResult<()> {
+    let payment = match database.get_payment(payment_id).await {
+        Ok(Some(payment)) => payment,
+
+        Ok(None) => {
+            edit_screen(bot, message, "⚠️ Платёж не найден.", ui::back_keyboard()).await?;
+
+            return Ok(());
+        }
+
+        Err(error) => {
+            tracing::error!(
+                payment_id,
+                error = %error,
+                "Не удалось получить платёж"
+            );
+
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Не удалось проверить платёж.",
+                ui::back_keyboard(),
+            )
+            .await?;
+
+            return Ok(());
+        }
+    };
+
+    if payment.provider != PROVIDER_PLATEGA {
+        tracing::warn!(
+            payment_id,
+            provider = payment.provider,
+            "Попытка проверить платёж другого провайдера"
+        );
+
+        return Ok(());
+    }
+
+    let order = match database.get_order(payment.order_id).await {
+        Ok(Some(order)) => order,
+
+        Ok(None) => {
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Заказ для платежа не найден.",
+                ui::back_keyboard(),
+            )
+            .await?;
+
+            return Ok(());
+        }
+
+        Err(error) => {
+            tracing::error!(
+                payment_id,
+                error = %error,
+                "Не удалось получить заказ платежа"
+            );
+
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Не удалось проверить заказ.",
+                ui::back_keyboard(),
+            )
+            .await?;
+
+            return Ok(());
+        }
+    };
+
+    let Ok(telegram_id) = i64::try_from(telegram_id) else {
+        return Ok(());
+    };
+
+    if order.telegram_id != telegram_id {
+        tracing::warn!(
+            payment_id,
+            order_id = order.id,
+            "Попытка получить чужой платёж"
+        );
+
+        return Ok(());
+    }
+
+    if payment.status == "paid" {
+        return activate_paid_order(bot, message, &order, &payment, activation).await;
+    }
+
+    if payment.status == "chargeback" {
+        edit_screen(
+            bot,
+            message,
+            "↩️ По этому платежу зафиксирован возврат средств.\n\n\
+             Если у вас есть вопросы, обратитесь в поддержку.",
+            ui::support_keyboard(service),
+        )
+        .await?;
+
+        return Ok(());
+    }
+
+    let provider_status = match payments.get_provider_status(&payment).await {
+        Ok(status) => status,
+
+        Err(PaymentError::NotConfigured) => {
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Проверка оплаты пока недоступна.",
+                ui::order_keyboard(service, &order, Some(&payment)),
+            )
+            .await?;
+
+            return Ok(());
+        }
+
+        Err(error) => {
+            tracing::error!(
+                payment_id,
+                error = %error,
+                "Не удалось получить статус платежа Platega"
+            );
+
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Не удалось проверить оплату.\n\n\
+                 Попробуйте ещё раз немного позже.",
+                ui::order_keyboard(service, &order, Some(&payment)),
+            )
+            .await?;
+
+            return Ok(());
+        }
+    };
+
+    if provider_status.amount_kopecks != payment.amount_kopecks
+        || provider_status.currency != payment.currency
+    {
+        tracing::error!(
+            payment_id,
+            transaction_id = provider_status.transaction_id,
+            "Данные платежа Platega не совпадают с локальным платежом"
+        );
+
+        edit_screen(
+            bot,
+            message,
+            "⚠️ Не удалось подтвердить параметры платежа.\n\n\
+             Обратитесь в поддержку.",
+            ui::support_keyboard(service),
+        )
+        .await?;
+
+        return Ok(());
+    }
+
+    if let Some(payload) = provider_status.payload.as_deref() {
+        let expected = format!("order:{};payment:{}", order.id, payment.id);
+
+        if payload != expected {
+            tracing::error!(
+                payment_id,
+                transaction_id = provider_status.transaction_id,
+                "Payload Platega не совпадает с локальным платежом"
+            );
+
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Не удалось подтвердить платёж.\n\n\
+                 Обратитесь в поддержку.",
+                ui::support_keyboard(service),
+            )
+            .await?;
+
+            return Ok(());
+        }
+    }
+
+    match provider_status.status.as_str() {
+        "PENDING" => {
+            let text = format!(
+                "{}\n\n⏳ Platega пока не подтвердила оплату.",
+                ui::order_text(&order, Some(&payment))
+            );
+
+            edit_screen(
+                bot,
+                message,
+                &text,
+                ui::order_keyboard(service, &order, Some(&payment)),
+            )
+            .await?;
+        }
+
+        "CONFIRMED" => match database.mark_payment_paid(payment.id).await {
+            Ok(MarkPaymentPaidResult::Applied | MarkPaymentPaidResult::AlreadyPaid) => {
+                return activate_paid_order(bot, message, &order, &payment, activation).await;
+            }
+
+            Ok(MarkPaymentPaidResult::OrderNotPayable) => {
+                edit_screen(
+                    bot,
+                    message,
+                    "⚠️ Платёж подтверждён, но заказ находится \
+                         в некорректном состоянии.\n\n\
+                         Обратитесь в поддержку.",
+                    ui::support_keyboard(service),
+                )
+                .await?;
+            }
+
+            Ok(MarkPaymentPaidResult::NotFound) => {
+                edit_screen(
+                    bot,
+                    message,
+                    "⚠️ Платёж больше не найден.",
+                    ui::back_keyboard(),
+                )
+                .await?;
+            }
+
+            Err(error) => {
+                tracing::error!(
+                    payment_id,
+                    error = %error,
+                    "Не удалось сохранить подтверждение оплаты"
+                );
+
+                edit_screen(
+                    bot,
+                    message,
+                    "⚠️ Оплата подтверждена, но возникла \
+                         внутренняя ошибка.\n\n\
+                         Попробуйте проверить платёж ещё раз.",
+                    ui::payment_retry_keyboard(payment.id),
+                )
+                .await?;
+            }
+        },
+
+        "CANCELED" => {
+            if let Err(error) = database.mark_payment_cancelled(payment.id).await {
+                tracing::error!(
+                    payment_id,
+                    error = %error,
+                    "Не удалось сохранить отмену платежа"
+                );
+
+                edit_screen(
+                    bot,
+                    message,
+                    "⚠️ Не удалось обновить состояние платежа.",
+                    ui::payment_retry_keyboard(payment.id),
+                )
+                .await?;
+
+                return Ok(());
+            }
+
+            edit_screen(
+                bot,
+                message,
+                "❌ Платёж отменён.\n\n\
+                 Вы можете оформить новый заказ.",
+                ui::back_keyboard(),
+            )
+            .await?;
+        }
+
+        "CHARGEBACKED" => {
+            if let Err(error) = database.mark_payment_chargeback(payment.id).await {
+                tracing::error!(
+                    payment_id,
+                    error = %error,
+                    "Не удалось сохранить возврат платежа"
+                );
+
+                return Ok(());
+            }
+
+            edit_screen(
+                bot,
+                message,
+                "↩️ По платежу зафиксирован возврат средств.\n\n\
+                 Если у вас есть вопросы, обратитесь в поддержку.",
+                ui::support_keyboard(service),
+            )
+            .await?;
+        }
+
+        status => {
+            tracing::warn!(
+                payment_id,
+                provider_status = status,
+                "Неизвестный статус Platega"
+            );
+
+            edit_screen(
+                bot,
+                message,
+                "⚠️ Platega вернула неизвестное состояние платежа.",
+                ui::payment_retry_keyboard(payment.id),
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn activate_paid_order(
+    bot: &Bot,
+    message: &Message,
+    order: &crate::database::Order,
+    payment: &crate::database::Payment,
+    activation: &ActivationService,
+) -> ResponseResult<()> {
+    match activation.activate_order(order.id).await {
+        Ok(_) => {
+            edit_screen(
+                bot,
+                message,
+                "✅ Оплата подтверждена.\n\n\
+                 Подписка успешно активирована.",
+                ui::status_keyboard(),
+            )
+            .await?;
+        }
+
+        Err(error) => {
+            tracing::error!(
+                payment_id = payment.id,
+                order_id = order.id,
+                error = %error,
+                "Платёж подтверждён, но активация не завершена"
+            );
+
+            edit_screen(
+                bot,
+                message,
+                "✅ Оплата подтверждена.\n\n\
+                 ⚠️ Подписка пока не была активирована из-за \
+                 внутренней ошибки.\n\n\
+                 Нажмите кнопку ниже, чтобы повторить активацию.",
+                ui::payment_retry_keyboard(payment.id),
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
 }
 
 async fn show_trial(

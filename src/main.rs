@@ -50,7 +50,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let activation = ActivationService::new(database.clone(), remnawave.clone());
 
-    let webhook_state = WebhookState::new(database.clone(), activation, config.platega.clone());
+    let webhook_state =
+        WebhookState::new(database.clone(), activation.clone(), config.platega.clone());
 
     let payments = PaymentService::new(database.clone(), config.platega.clone())?;
 
@@ -80,6 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         database,
         tariffs,
         payments,
+        activation,
         config.service,
     )
     .await;

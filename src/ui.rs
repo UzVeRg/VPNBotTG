@@ -481,11 +481,21 @@ pub fn order_keyboard(
 ) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
 
-    if let Some(url) = payment
-        .and_then(|payment| payment.payment_url.as_deref())
-        .and_then(|value| reqwest::Url::parse(value).ok())
-    {
-        rows.push(vec![InlineKeyboardButton::url("💳 Оплатить", url)]);
+    if let Some(payment) = payment {
+        if let Some(url) = payment
+            .payment_url
+            .as_deref()
+            .and_then(|value| reqwest::Url::parse(value).ok())
+        {
+            rows.push(vec![InlineKeyboardButton::url("💳 Оплатить", url)]);
+        }
+
+        if payment.provider_payment_id.is_some() {
+            rows.push(vec![InlineKeyboardButton::callback(
+                "🔄 Проверить оплату",
+                format!("{CALLBACK_PAYMENT_PREFIX}{}", payment.id),
+            )]);
+        }
     } else {
         rows.push(vec![InlineKeyboardButton::callback(
             "🔄 Попробовать снова",
@@ -509,6 +519,19 @@ pub fn order_keyboard(
     )]);
 
     InlineKeyboardMarkup::new(rows)
+}
+
+pub fn payment_retry_keyboard(payment_id: i64) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new([
+        vec![InlineKeyboardButton::callback(
+            "🔄 Повторить",
+            format!("{CALLBACK_PAYMENT_PREFIX}{payment_id}"),
+        )],
+        vec![InlineKeyboardButton::callback(
+            "🏠 Главное меню",
+            CALLBACK_HOME,
+        )],
+    ])
 }
 
 pub fn about_text(trial: &TrialConfig) -> String {
