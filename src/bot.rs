@@ -149,7 +149,7 @@ async fn handle_callback(
     if data == ui::CALLBACK_DEVICES
         || data.starts_with(ui::CALLBACK_DEVICES_PAGE_PREFIX)
         || data.starts_with(ui::CALLBACK_DEVICE_PREFIX)
-        || data.starts_with(ui::CALLBACK_DEVICE_DELETE_PREFIX)
+    //|| data.starts_with(ui::CALLBACK_DEVICE_DELETE_PREFIX)
     {
         if u64::try_from(message.chat.id.0).ok() != Some(query.from.id.0) {
             return Ok(());
@@ -244,7 +244,8 @@ async fn handle_devices(
     data: &str,
     devices: &DeviceService,
 ) -> ResponseResult<()> {
-    let screen = if let Some(token) = data.strip_prefix(ui::CALLBACK_DEVICE_DELETE_PREFIX) {
+    let screen = if let Some(token) = data.strip_prefix(ui::CALLBACK_DEVICE_PREFIX) {
+        //CALLBACK_DEVICE_DELETE_PREFIX
         devices.delete(telegram_id, token).await.map(|list| {
             let (text, keyboard) = ui::devices_screen(&list, 0);
             (format!("✅ Устройство удалено.\n\n{text}"), keyboard)

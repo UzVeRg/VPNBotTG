@@ -24,7 +24,7 @@ pub const CALLBACK_PAYMENT_PREFIX: &str = "payment:";
 pub const CALLBACK_DEVICES: &str = "devices";
 pub const CALLBACK_DEVICES_PAGE_PREFIX: &str = "devices_page:";
 pub const CALLBACK_DEVICE_PREFIX: &str = "device:";
-pub const CALLBACK_DEVICE_DELETE_PREFIX: &str = "device_delete:";
+//pub const CALLBACK_DEVICE_DELETE_PREFIX: &str = "device_delete:";
 
 const DEVICES_PAGE_SIZE: usize = 5;
 
@@ -228,7 +228,8 @@ pub fn devices_screen(list: &DeviceList, page: usize) -> (String, InlineKeyboard
     if list.devices.is_empty() {
         text.push_str("\nУстройств пока нет. Добавьте ссылку подписки в приложение и обновите её.");
     } else {
-        text.push_str("\nВыберите устройство, чтобы освободить его место:\n");
+        //text.push_str("\nВыберите устройство, чтобы освободить его место:\n");
+        text.push_str("\nВыберите устройство, чтобы посмотреть информацию:\n");
         for (index, device) in list
             .devices
             .iter()
@@ -280,7 +281,7 @@ pub fn devices_screen(list: &DeviceList, page: usize) -> (String, InlineKeyboard
     (text, InlineKeyboardMarkup::new(rows))
 }
 
-pub fn device_confirmation_screen(device: &HwidDevice) -> (String, InlineKeyboardMarkup) {
+/*pub fn device_confirmation_screen(device: &HwidDevice) -> (String, InlineKeyboardMarkup) {
     let name = device_name(device);
     let platform = device.platform.as_deref().unwrap_or("Не указана");
     let os_version = device.os_version.as_deref().unwrap_or("Не указана");
@@ -300,6 +301,26 @@ pub fn device_confirmation_screen(device: &HwidDevice) -> (String, InlineKeyboar
         )],
         vec![InlineKeyboardButton::callback("Отмена", CALLBACK_DEVICES)],
     ]);
+
+    (text, keyboard)
+}*/
+
+pub fn device_confirmation_screen(device: &HwidDevice) -> (String, InlineKeyboardMarkup) {
+    let name = device_name(device);
+    let platform = device.platform.as_deref().unwrap_or("Не указана");
+    let os_version = device.os_version.as_deref().unwrap_or("Не указана");
+
+    let text = format!(
+        "📱 {name}\n\nСистема: {}\nВерсия: {}\nДобавлено: {}",
+        device_label(platform, 40),
+        device_label(os_version, 40),
+        device_added_at(device),
+    );
+
+    let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::callback(
+        "⬅️ К устройствам",
+        CALLBACK_DEVICES,
+    )]]);
 
     (text, keyboard)
 }
