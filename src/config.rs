@@ -1,4 +1,4 @@
-use std::{env, str::FromStr};
+use std::{env, net::SocketAddr, str::FromStr};
 
 use reqwest::Url;
 use thiserror::Error;
@@ -11,6 +11,7 @@ pub struct Config {
     pub database_url: String,
     pub trial: TrialConfig,
     pub service: ServiceConfig,
+    pub platega: PlategaConfig,
 }
 
 #[derive(Clone)]
@@ -22,16 +23,20 @@ pub struct TrialConfig {
 }
 
 #[derive(Clone)]
-pub struct ServiceConfig {
-    pub support_telegram_url: Url,
-    pub support_email: String,
+pub struct PlategaConfig {
+    pub base_url: Url,
+    pub merchant_id: Option<String>,
+    pub api_key: Option<String>,
+    pub webhook_bind: SocketAddr,
+    pub callback_url: Url,
+    pub return_url: Url,
+    pub failed_url: Url,
+}
 
-    pub phone: Option<String>,
-    pub contact_address: Option<String>,
-
-    pub docs_url: Url,
-    pub user_agreement_url: Url,
-    pub privacy_url: Url,
+impl PlategaConfig {
+    pub fn is_configured(&self) -> bool {
+        self.merchant_id.is_some() && self.api_key.is_some()
+    }
 }
 
 impl Config {
@@ -59,6 +64,22 @@ impl Config {
             privacy_url: required_url("SERVICE_PRIVACY_URL")?,
         };
 
+        let platega = PlategaConfig {
+            base_url: required_url("PLATEGA_BASE_URL")?,
+            merchant_id: optional("PLATEGA_MERCHANT_ID"),
+            api_key: optional("PLATEGA_API_KEY"),
+            webhook_bind: required("PLATEGA_WEBHOOK_BIND")?
+                .parse()
+                .map_err(|_| ConfigError::InvalidVariable("PLATEGA_WEBHOOK_BIND"))?,
+            callback_url: required_url("PLATEGA_CALLBACK_URL")?,
+            return_url: required_url("PLATEGA_RETURN_URL")?,
+            failed_url: required_url("PLATEGA_FAILED_URL")?,
+        };
+        
+        if platega.merchant_id.is_some() != platega.api_key.is_some() {
+            return Err(ConfigError::IncompletePlategaCredentials);
+        }
+
         Ok(Self {
             telegram_token: required("TELOXIDE_TOKEN")?,
             remnawave_url: required("REMNAWAVE_URL")?,
@@ -66,6 +87,7 @@ impl Config {
             database_url: required("DATABASE_URL")?,
             trial,
             service,
+            platega,
         })
     }
 }
@@ -112,4 +134,7 @@ pub enum ConfigError {
 
     #[error("некорректные параметры пробной подписки")]
     InvalidTrialConfiguration,
+
+    #[error("Merchant ID и API key Platega должны быть заданы одновременно")]
+    IncompletePlategaCredentials,
 }

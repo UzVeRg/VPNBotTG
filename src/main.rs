@@ -8,6 +8,7 @@ mod remnawave;
 mod tariff;
 mod trial;
 mod ui;
+mod webhook;
 
 use config::Config;
 use database::Database;
@@ -25,6 +26,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::from_env()?;
 
+    let webhook_bind = config.platega.webhook_bind;
+    
     let tariffs = TariffCatalog::load("config/tariffs.json")?;
 
     tracing::info!(
@@ -45,10 +48,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let trial =
         TrialService::new(database.clone(), remnawave.clone(), config.trial.clone()).await?;
 
+    webhook::serve(webhook_bind).await?;
+
+
+    let webhook_task = tokio::spawn(async move {
+        tracing::info!(bind = %webhook_bind, "HTTP endpoint Platega запущен");
+    
+        if let Err(error) = webhook::serve(webhook_bind).await {
+            tracing::error!(error = %error, "HTTP endpoint Platega остановлен с ошибкой");
+        }
+    });
+    
     tracing::info!("VPNBotTG запущен");
 
     bot::run(bot, remnawave, trial, database, tariffs, config.service).await;
 
+    webhook_task.abort();
+    
     tracing::info!("VPNBotTG остановлен");
 
     Ok(())
